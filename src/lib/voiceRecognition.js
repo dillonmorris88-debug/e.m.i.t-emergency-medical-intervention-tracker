@@ -1,4 +1,4 @@
-const WAKE_WORD = 'emit';
+const WAKE_WORDS = ['emit', 'emmet', 'emmit', 'emitt', 'e.m.i.t', 'e.m.i.t.'];
 
 export function startVoiceRecognition(onWakeWord, onResult, onInterim) {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -26,8 +26,9 @@ export function startVoiceRecognition(onWakeWord, onResult, onInterim) {
 
     if (finalTranscript) {
       const transcript = finalTranscript.toLowerCase().trim();
-      if (transcript.includes(WAKE_WORD)) {
-        const command = transcript.split(WAKE_WORD).pop().trim();
+      const matchedWake = WAKE_WORDS.find(w => transcript.includes(w));
+      if (matchedWake) {
+        const command = transcript.split(matchedWake).pop().trim();
         onWakeWord();
         if (onInterim) onInterim('');
         if (command) onResult(command);
