@@ -44,86 +44,7 @@ export default function ActiveCall() {
     }
   }, [call, callId, navigate]);
 
-  const startListening = useCallback((voiceCommandHandler) => {
-    recognitionRef.current = startVoiceRecognition(
-      () => {
-        setLastCommand('');
-        setWakeWordDetected(true);
-        clearTimeout(wakeTimerRef.current);
-        wakeTimerRef.current = setTimeout(() => setWakeWordDetected(false), 1500);
-      },
-      (cmd) => {
-        setLastCommand(cmd);
-        setLiveTranscript('');
-        voiceCommandHandler(cmd);
-      },
-      (interim) => setLiveTranscript(interim)
-    );
-    if (recognitionRef.current) setListening(true);
-  }, []);
-
-  const stopListening = useCallback(() => {
-    stopVoiceRecognition(recognitionRef.current);
-    recognitionRef.current = null;
-    setListening(false);
-    setLiveTranscript('');
-    setWakeWordDetected(false);
-  }, []);
-
-  const toggleListening = useCallback(() => {
-    if (listening) stopListening();
-    else startListening(handleVoiceCommand);
-  }, [listening, startListening, stopListening, handleVoiceCommand]);
-
-  // Voice recognition — auto-start
-  useEffect(() => {
-    if (!call) return;
-    startListening(handleVoiceCommand);
-    return () => stopListening();
-  }, [call?.id]);
-
-  const handleVoiceCommand = useCallback((cmd) => {
-    const lower = cmd.toLowerCase();
-    if (lower.includes('iv') || lower.includes('intravenous')) {
-      addEvent('IV Access', 'intervention');
-    } else if (lower.includes('io')) {
-      addEvent('IO Access', 'intervention');
-    } else if (lower.includes('spinal')) {
-      addEvent('Spinal Restriction', 'intervention');
-    } else if (lower.includes('bvm')) {
-      addEvent('BVM', 'intervention');
-    } else if (lower.includes('airway')) {
-      addEvent('Airway Placement', 'intervention');
-    } else if (lower.includes('epi') && lower.includes('drip')) {
-      addEvent('Dirty Epi Drip', 'medication');
-    } else if (lower.includes('epi') || lower.includes('epinephrine')) {
-      addEvent('Epinephrine', 'medication');
-    } else if (lower.includes('fentanyl')) {
-      addEvent('Fentanyl', 'medication');
-    } else if (lower.includes('ketamine')) {
-      addEvent('Ketamine', 'medication');
-    } else if (lower.includes('ativan')) {
-      addEvent('Ativan', 'medication');
-    } else if (lower.includes('versed')) {
-      addEvent('Versed', 'medication');
-    } else if (lower.includes('ofirmev') || lower.includes('offirmev')) {
-      addEvent('Ofirmev', 'medication');
-    } else if (lower.includes('fluid') || lower.includes('bolus')) {
-      addEvent('Fluid Bolus', 'medication');
-    } else if (lower.includes('cpr')) {
-      startCPR();
-    } else if (lower.includes('rosc')) {
-      handleROSC();
-    } else if (lower.includes('vfib') || lower.includes('v fib') || lower.includes('v-fib')) {
-      markRhythm('V-Fib');
-    } else if (lower.includes('vtach') || lower.includes('v tach') || lower.includes('v-tach')) {
-      markRhythm('V-Tach');
-    } else if (lower.includes('pea')) {
-      markRhythm('PEA');
-    } else if (lower.includes('asystole')) {
-      markRhythm('Asystole');
-    }
-  }, []);
+  // --- All action handlers defined FIRST ---
 
   const addEvent = useCallback((label, category, details = '') => {
     setCall(prev => {
@@ -131,7 +52,6 @@ export default function ActiveCall() {
       const cprEvent = prev.events?.find(e => e.category === 'cpr' && e.label === 'CPR Started');
       const cprStart = cprEvent ? new Date(cprEvent.timestamp).getTime() : null;
       const elapsed_seconds = cprStart ? Math.floor((Date.now() - cprStart) / 1000) : null;
-
       const newEvent = {
         id: crypto.randomUUID(),
         timestamp: new Date().toISOString(),
@@ -235,6 +155,89 @@ export default function ActiveCall() {
     });
     navigate('/');
   }, [navigate]);
+
+  // --- Voice handlers defined AFTER their dependencies ---
+
+  const handleVoiceCommand = useCallback((cmd) => {
+    const lower = cmd.toLowerCase();
+    if (lower.includes('iv') || lower.includes('intravenous')) {
+      addEvent('IV Access', 'intervention');
+    } else if (lower.includes('io')) {
+      addEvent('IO Access', 'intervention');
+    } else if (lower.includes('spinal')) {
+      addEvent('Spinal Restriction', 'intervention');
+    } else if (lower.includes('bvm')) {
+      addEvent('BVM', 'intervention');
+    } else if (lower.includes('airway')) {
+      addEvent('Airway Placement', 'intervention');
+    } else if (lower.includes('epi') && lower.includes('drip')) {
+      addEvent('Dirty Epi Drip', 'medication');
+    } else if (lower.includes('epi') || lower.includes('epinephrine')) {
+      addEvent('Epinephrine', 'medication');
+    } else if (lower.includes('fentanyl')) {
+      addEvent('Fentanyl', 'medication');
+    } else if (lower.includes('ketamine')) {
+      addEvent('Ketamine', 'medication');
+    } else if (lower.includes('ativan')) {
+      addEvent('Ativan', 'medication');
+    } else if (lower.includes('versed')) {
+      addEvent('Versed', 'medication');
+    } else if (lower.includes('ofirmev') || lower.includes('offirmev')) {
+      addEvent('Ofirmev', 'medication');
+    } else if (lower.includes('fluid') || lower.includes('bolus')) {
+      addEvent('Fluid Bolus', 'medication');
+    } else if (lower.includes('cpr')) {
+      startCPR();
+    } else if (lower.includes('rosc')) {
+      handleROSC();
+    } else if (lower.includes('vfib') || lower.includes('v fib') || lower.includes('v-fib')) {
+      markRhythm('V-Fib');
+    } else if (lower.includes('vtach') || lower.includes('v tach') || lower.includes('v-tach')) {
+      markRhythm('V-Tach');
+    } else if (lower.includes('pea')) {
+      markRhythm('PEA');
+    } else if (lower.includes('asystole')) {
+      markRhythm('Asystole');
+    }
+  }, [addEvent, startCPR, handleROSC, markRhythm]);
+
+  const startListening = useCallback((voiceCommandHandler) => {
+    recognitionRef.current = startVoiceRecognition(
+      () => {
+        setLastCommand('');
+        setWakeWordDetected(true);
+        clearTimeout(wakeTimerRef.current);
+        wakeTimerRef.current = setTimeout(() => setWakeWordDetected(false), 1500);
+      },
+      (cmd) => {
+        setLastCommand(cmd);
+        setLiveTranscript('');
+        voiceCommandHandler(cmd);
+      },
+      (interim) => setLiveTranscript(interim)
+    );
+    if (recognitionRef.current) setListening(true);
+  }, []);
+
+  const stopListening = useCallback(() => {
+    stopVoiceRecognition(recognitionRef.current);
+    recognitionRef.current = null;
+    setListening(false);
+    setLiveTranscript('');
+    setWakeWordDetected(false);
+  }, []);
+
+  const toggleListening = useCallback(() => {
+    if (listening) stopListening();
+    else startListening(handleVoiceCommand);
+  }, [listening, startListening, stopListening, handleVoiceCommand]);
+
+  // Voice recognition — auto-start
+  useEffect(() => {
+    if (!call) return;
+    startListening(handleVoiceCommand);
+    return () => stopListening();
+  }, [call?.id]);
 
   if (!call) {
     return (
