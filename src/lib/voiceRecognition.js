@@ -1,20 +1,37 @@
 const WAKE_WORD = 'emit';
 
-export function startVoiceRecognition(onWakeWord, onResult) {
+export function startVoiceRecognition(onWakeWord, onResult, onInterim) {
   const SpeechRecognition = window.SpeechRecognition || window.webkitSpeechRecognition;
   if (!SpeechRecognition) return null;
 
   const recognition = new SpeechRecognition();
   recognition.continuous = true;
-  recognition.interimResults = false;
+  recognition.interimResults = true;
   recognition.lang = 'en-US';
 
   recognition.onresult = (event) => {
-    const transcript = event.results[event.results.length - 1][0].transcript.toLowerCase().trim();
-    if (transcript.includes(WAKE_WORD)) {
-      const command = transcript.split(WAKE_WORD).pop().trim();
-      onWakeWord();
-      if (command) onResult(command);
+    let interimTranscript = '';
+    let finalTranscript = '';
+
+    for (let i = event.resultIndex; i < event.results.length; i++) {
+      const t = event.results[i][0].transcript;
+      if (event.results[i].isFinal) {
+        finalTranscript += t;
+      } else {
+        interimTranscript += t;
+      }
+    }
+
+    if (onInterim) onInterim(interimTranscript || finalTranscript);
+
+    if (finalTranscript) {
+      const transcript = finalTranscript.toLowerCase().trim();
+      if (transcript.includes(WAKE_WORD)) {
+        const command = transcript.split(WAKE_WORD).pop().trim();
+        onWakeWord();
+        if (onInterim) onInterim('');
+        if (command) onResult(command);
+      }
     }
   };
 

@@ -23,6 +23,7 @@ export default function ActiveCall() {
   const [activeTab, setActiveTab] = useState('interventions');
   const [listening, setListening] = useState(false);
   const [lastCommand, setLastCommand] = useState('');
+  const [liveTranscript, setLiveTranscript] = useState('');
   const recognitionRef = useRef(null);
 
   useEffect(() => {
@@ -48,8 +49,10 @@ export default function ActiveCall() {
       () => setLastCommand(''),
       (cmd) => {
         setLastCommand(cmd);
+        setLiveTranscript('');
         handleVoiceCommand(cmd);
-      }
+      },
+      (interim) => setLiveTranscript(interim)
     );
     if (recognitionRef.current) setListening(true);
     return () => {
@@ -242,7 +245,7 @@ export default function ActiveCall() {
 
       {/* Voice Indicator */}
       <div className="px-4 py-2 border-b border-border">
-        <VoiceIndicator listening={listening} lastCommand={lastCommand} />
+        <VoiceIndicator listening={listening} lastCommand={lastCommand} liveTranscript={liveTranscript} />
       </div>
 
       {/* CPR Button or Panel */}
