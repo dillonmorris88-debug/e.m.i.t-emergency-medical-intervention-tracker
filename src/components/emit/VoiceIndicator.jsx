@@ -1,25 +1,42 @@
 import { Mic, MicOff } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-export default function VoiceIndicator({ active, listening, lastCommand, liveTranscript }) {
+export default function VoiceIndicator({ listening, lastCommand, liveTranscript, wakeWordDetected, onToggle }) {
   return (
     <div className="flex flex-col gap-1.5">
       <div className="flex items-center gap-3">
-        <div className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold border transition-all ${
-          listening
-            ? 'bg-green-500/20 border-green-500/50 text-green-300 pulse-green'
-            : 'bg-secondary border-border text-muted-foreground'
-        }`}>
+        <button
+          onClick={onToggle}
+          className={`flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold border transition-all btn-tap ${
+            listening
+              ? 'bg-green-500/20 border-green-500/50 text-green-300 pulse-green'
+              : 'bg-secondary border-border text-muted-foreground hover:border-primary/50 hover:text-foreground'
+          }`}
+        >
           {listening ? <Mic className="w-3 h-3" /> : <MicOff className="w-3 h-3" />}
           {listening ? 'Listening' : 'Voice Off'}
-        </div>
+        </button>
+
         <AnimatePresence>
-          {lastCommand && (
+          {wakeWordDetected && (
+            <motion.div
+              key="wake"
+              initial={{ opacity: 0, scale: 0.8 }}
+              animate={{ opacity: 1, scale: 1 }}
+              exit={{ opacity: 0, scale: 0.8 }}
+              className="flex items-center gap-1.5 px-3 py-1 rounded-full bg-primary/20 border border-primary/60 text-primary text-xs font-bold tracking-widest"
+            >
+              ⚡ EMIT
+            </motion.div>
+          )}
+        </AnimatePresence>
+        <AnimatePresence>
+          {lastCommand && !wakeWordDetected && (
             <motion.div
               initial={{ opacity: 0, x: -8 }}
               animate={{ opacity: 1, x: 0 }}
               exit={{ opacity: 0 }}
-              className="text-xs text-muted-foreground italic truncate max-w-[160px]"
+              className="text-xs text-muted-foreground italic truncate max-w-[140px]"
             >
               "{lastCommand}"
             </motion.div>

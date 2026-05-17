@@ -24,7 +24,9 @@ export default function ActiveCall() {
   const [listening, setListening] = useState(false);
   const [lastCommand, setLastCommand] = useState('');
   const [liveTranscript, setLiveTranscript] = useState('');
+  const [wakeWordDetected, setWakeWordDetected] = useState(false);
   const recognitionRef = useRef(null);
+  const wakeTimerRef = useRef(null);
 
   useEffect(() => {
     let c = callId ? getCall(callId) : null;
@@ -42,11 +44,14 @@ export default function ActiveCall() {
     }
   }, [call, callId, navigate]);
 
-  // Voice recognition
-  useEffect(() => {
-    if (!call) return;
+  const startListening = useCallback(() => {
     recognitionRef.current = startVoiceRecognition(
-      () => setLastCommand(''),
+      () => {
+        setLastCommand('');
+        setWakeWordDetected(true);
+        clearTimeout(wakeTimerRef.current);
+        wakeTimerRef.current = setTimeout(() => setWakeWordDetected(false), 1500);
+      },
       (cmd) => {
         setLastCommand(cmd);
         setLiveTranscript('');
@@ -55,10 +60,26 @@ export default function ActiveCall() {
       (interim) => setLiveTranscript(interim)
     );
     if (recognitionRef.current) setListening(true);
-    return () => {
-      stopVoiceRecognition(recognitionRef.current);
-      setListening(false);
-    };
+  }, [handleVoiceCommand]);
+
+  const stopListening = useCallback(() => {
+    stopVoiceRecognition(recognitionRef.current);
+    recognitionRef.current = null;
+    setListening(false);
+    setLiveTranscript('');
+    setWakeWordDetected(false);
+  }, []);
+
+  const toggleListening = useCallback(() => {
+    if (listening) stopListening();
+    else startListening();
+  }, [listening, startListening, stopListening]);
+
+  // Voice recognition — auto-start
+  useEffect(() => {
+    if (!call) return;
+    startListening();
+    return () => stopListening();
   }, [call?.id]);
 
   const handleVoiceCommand = useCallback((cmd) => {
@@ -245,7 +266,13 @@ export default function ActiveCall() {
 
       {/* Voice Indicator */}
       <div className="px-4 py-2 border-b border-border">
-        <VoiceIndicator listening={listening} lastCommand={lastCommand} liveTranscript={liveTranscript} />
+        <VoiceIndicator
+          listening={listening}
+          lastCommand={lastCommand}
+          liveTranscript={liveTranscript}
+          wakeWordDetected={wakeWordDetected}
+          onToggle={toggleListening}
+        />
       </div>
 
       {/* CPR Button or Panel */}
