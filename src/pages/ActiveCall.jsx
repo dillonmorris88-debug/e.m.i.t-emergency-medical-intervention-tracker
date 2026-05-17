@@ -27,6 +27,7 @@ export default function ActiveCall() {
   const [wakeWordDetected, setWakeWordDetected] = useState(false);
   const recognitionRef = useRef(null);
   const wakeTimerRef = useRef(null);
+  const voiceCommandRef = useRef(null);
 
   useEffect(() => {
     let c = callId ? getCall(callId) : null;
@@ -257,7 +258,7 @@ export default function ActiveCall() {
     }
   }, [addEvent, startCPR, handleROSC, markRhythm]);
 
-  const startListening = useCallback((voiceCommandHandler) => {
+  const startListening = useCallback(() => {
     recognitionRef.current = startVoiceRecognition(
       () => {
         setLastCommand('');
@@ -268,7 +269,8 @@ export default function ActiveCall() {
       (cmd) => {
         setLastCommand(cmd);
         setLiveTranscript('');
-        voiceCommandHandler(cmd);
+        // Always call through the ref so we never have a stale closure
+        voiceCommandRef.current?.(cmd);
       },
       (interim) => setLiveTranscript(interim)
     );
@@ -283,18 +285,22 @@ export default function ActiveCall() {
     setWakeWordDetected(false);
   }, []);
 
+  // Keep the ref always pointing to the latest handler — no restart needed
+  useEffect(() => {
+    voiceCommandRef.current = handleVoiceCommand;
+  }, [handleVoiceCommand]);
+
   const toggleListening = useCallback(() => {
     if (listening) stopListening();
-    else startListening(handleVoiceCommand);
-  }, [listening, startListening, stopListening, handleVoiceCommand]);
+    else startListening();
+  }, [listening, startListening, stopListening]);
 
-  // Voice recognition — auto-start, restarts when handler updates
+  // Voice recognition — auto-start once per call
   useEffect(() => {
     if (!call) return;
-    stopListening();
-    startListening(handleVoiceCommand);
+    startListening();
     return () => stopListening();
-  }, [call?.id, handleVoiceCommand]);
+  }, [call?.id]);
 
   if (!call) {
     return (
