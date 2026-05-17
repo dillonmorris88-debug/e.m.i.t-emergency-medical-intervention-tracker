@@ -1,0 +1,70 @@
+{
+  "name": "CallRecord",
+  "type": "object",
+  "properties": {
+    "call_number": {
+      "type": "string"
+    },
+    "started_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "ended_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "events": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "timestamp": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "category": {
+            "type": "string",
+            "enum": [
+              "intervention",
+              "medication",
+              "cpr",
+              "rhythm",
+              "rosc",
+              "notes"
+            ]
+          },
+          "label": {
+            "type": "string"
+          },
+          "details": {
+            "type": "string"
+          },
+          "elapsed_seconds": {
+            "type": "number"
+          }
+        }
+      }
+    },
+    "cpr_active": {
+      "type": "boolean",
+      "default": false
+    },
+    "rosc": {
+      "type": "boolean",
+      "default": false
+    },
+    "discontinued": {
+      "type": "boolean",
+      "default": false
+    },
+    "current_rhythm": {
+      "type": "string"
+    }
+  },
+  "required": [
+    "started_at"
+  ]
+}
