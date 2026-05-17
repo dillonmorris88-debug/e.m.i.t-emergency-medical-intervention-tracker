@@ -44,7 +44,7 @@ export default function ActiveCall() {
     }
   }, [call, callId, navigate]);
 
-  const startListening = useCallback(() => {
+  const startListening = useCallback((voiceCommandHandler) => {
     recognitionRef.current = startVoiceRecognition(
       () => {
         setLastCommand('');
@@ -55,12 +55,12 @@ export default function ActiveCall() {
       (cmd) => {
         setLastCommand(cmd);
         setLiveTranscript('');
-        handleVoiceCommand(cmd);
+        voiceCommandHandler(cmd);
       },
       (interim) => setLiveTranscript(interim)
     );
     if (recognitionRef.current) setListening(true);
-  }, [handleVoiceCommand]);
+  }, []);
 
   const stopListening = useCallback(() => {
     stopVoiceRecognition(recognitionRef.current);
@@ -72,13 +72,13 @@ export default function ActiveCall() {
 
   const toggleListening = useCallback(() => {
     if (listening) stopListening();
-    else startListening();
-  }, [listening, startListening, stopListening]);
+    else startListening(handleVoiceCommand);
+  }, [listening, startListening, stopListening, handleVoiceCommand]);
 
   // Voice recognition — auto-start
   useEffect(() => {
     if (!call) return;
-    startListening();
+    startListening(handleVoiceCommand);
     return () => stopListening();
   }, [call?.id]);
 
