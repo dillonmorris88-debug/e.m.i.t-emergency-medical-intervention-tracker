@@ -15,12 +15,13 @@ import ForgotPassword from '@/pages/ForgotPassword';
 import ResetPassword from '@/pages/ResetPassword';
 import ProtectedRoute from '@/components/ProtectedRoute';
 import PrivacyPolicy from '@/pages/PrivacyPolicy';
+import HipaaPolicy from '@/pages/HipaaPolicy';
 
 const PrivacyGate = ({ children }) => {
-  const accepted = localStorage.getItem('emit_privacy_accepted') === 'true';
-  if (!accepted) {
-    return <Navigate to="/privacy-policy" replace />;
-  }
+  const privacyAccepted = localStorage.getItem('emit_privacy_accepted') === 'true';
+  const hipaaAccepted = localStorage.getItem('emit_hipaa_accepted') === 'true';
+  if (!privacyAccepted) return <Navigate to="/privacy-policy" replace />;
+  if (!hipaaAccepted) return <Navigate to="/hipaa-policy" replace />;
   return children;
 };
 
@@ -51,6 +52,7 @@ const AuthenticatedApp = () => {
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />
       <Route path="/privacy-policy" element={<PrivacyPolicy />} />
+      <Route path="/hipaa-policy" element={<HipaaPolicy />} />
       <Route element={<ProtectedRoute unauthenticatedElement={<Navigate to="/login" replace />} />}>
         <Route path="/" element={<PrivacyGate><Home /></PrivacyGate>} />
         <Route path="/call" element={<PrivacyGate><ActiveCall /></PrivacyGate>} />

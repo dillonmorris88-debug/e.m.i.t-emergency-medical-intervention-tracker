@@ -7,7 +7,7 @@ export default function PrivacyPolicy() {
 
   const handleAccept = () => {
     localStorage.setItem('emit_privacy_accepted', 'true');
-    navigate('/', { replace: true });
+    navigate('/hipaa-policy', { replace: true });
   };
 
   return (
