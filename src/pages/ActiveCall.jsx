@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Heart, Syringe, Activity, ChevronLeft, FileText, Plus } from 'lucide-react';
+import { Heart, Syringe, Activity, ChevronLeft, FileText, Plus, Bug } from 'lucide-react';
 import { getCall, saveCall, createNewCall } from '@/lib/callStorage';
 import { startVoiceRecognition, stopVoiceRecognition } from '@/lib/voiceRecognition';
 import CallTimer from '@/components/emit/CallTimer';
@@ -9,6 +9,7 @@ import InterventionPanel from '@/components/emit/InterventionPanel';
 import MedicationPanel from '@/components/emit/MedicationPanel';
 import EventLog from '@/components/emit/EventLog';
 import VoiceIndicator from '@/components/emit/VoiceIndicator';
+import BugReportModal from '@/components/emit/BugReportModal';
 
 const TABS = [
   { key: 'interventions', label: 'Interventions', icon: Syringe, color: 'text-blue-400' },
@@ -28,6 +29,7 @@ export default function ActiveCall() {
   const recognitionRef = useRef(null);
   const wakeTimerRef = useRef(null);
   const voiceCommandRef = useRef(null);
+  const [showBugReport, setShowBugReport] = useState(false);
 
   useEffect(() => {
     let c = callId ? getCall(callId) : null;
@@ -402,8 +404,15 @@ export default function ActiveCall() {
         )}
       </div>
 
-      {/* Quick Note FAB */}
-      <div className="fixed bottom-6 right-6">
+      {/* FABs */}
+      <div className="fixed bottom-6 right-6 flex flex-col gap-3">
+        <button
+          onClick={() => setShowBugReport(true)}
+          className="w-12 h-12 rounded-full bg-secondary border border-border flex items-center justify-center shadow-lg hover:border-primary/50 btn-tap transition-all"
+          title="Log Bug Report"
+        >
+          <Bug className="w-5 h-5 text-muted-foreground" />
+        </button>
         <button
           onClick={() => {
             const note = prompt('Quick note:');
@@ -414,6 +423,10 @@ export default function ActiveCall() {
           <Plus className="w-5 h-5 text-muted-foreground" />
         </button>
       </div>
+
+      {showBugReport && (
+        <BugReportModal call={call} onClose={() => setShowBugReport(false)} />
+      )}
     </div>
   );
 }
