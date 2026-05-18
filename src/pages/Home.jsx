@@ -45,6 +45,14 @@ export default function Home() {
         <p className="mt-4 text-xs text-muted-foreground text-center">
           Say <span className="font-bold text-primary">"EMIT"</span> + action to log hands-free
         </p>
+
+        <button
+          onClick={() => navigate('/scribe')}
+          className="mt-4 flex items-center gap-2 px-5 py-2.5 rounded-xl font-semibold text-sm bg-secondary border border-border text-muted-foreground hover:text-foreground hover:border-primary/40 btn-tap transition-all"
+        >
+          <Bot className="w-4 h-4" />
+          AI Scribe
+        </button>
       </div>
 
       {/* Recent Calls */}
