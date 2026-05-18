@@ -1,24 +1,28 @@
 import { useState, useRef } from 'react';
-import { GripVertical, BookOpen } from 'lucide-react';
+import { GripVertical, BookOpen, PlusCircle, Bug, X } from 'lucide-react';
 import { useLongPress } from '@/hooks/useLongPress';
 import LearnModal from '@/components/emit/LearnModal';
+import AddCustomButtonModal from '@/components/emit/AddCustomButtonModal';
 
 /**
  * Props:
- *  items        - array of { key, label }
+ *  items        - array of { key, label, custom? }
  *  onReorder    - (fromIndex, toIndex) => void
  *  onEvent      - (label, category) => void
+ *  onAddItem    - (item) => void
+ *  onRemoveItem - (item) => void
  *  category     - 'intervention' | 'medication'
  *  buttonClass  - tailwind classes for the button
+ *  onBugReport  - () => void
  */
-export default function DraggableButtonGrid({ items, onReorder, onEvent, category, buttonClass }) {
+export default function DraggableButtonGrid({ items, onReorder, onEvent, onAddItem, onRemoveItem, category, buttonClass, onBugReport }) {
   const [editMode, setEditMode] = useState(false);
   const [learnItem, setLearnItem] = useState(null);
+  const [showAddCustom, setShowAddCustom] = useState(false);
   const [dragIndex, setDragIndex] = useState(null);
   const [overIndex, setOverIndex] = useState(null);
   const touchDragRef = useRef({ startY: 0, startX: 0, index: null });
 
-  // Long press on any button enters edit mode
   const longPressHandlers = useLongPress(() => {
     setEditMode(true);
     navigator.vibrate?.(60);
@@ -30,25 +34,13 @@ export default function DraggableButtonGrid({ items, onReorder, onEvent, categor
     setDragIndex(index);
     e.dataTransfer.effectAllowed = 'move';
   };
-
-  const handleDragOver = (e, index) => {
-    e.preventDefault();
-    setOverIndex(index);
-  };
-
+  const handleDragOver = (e, index) => { e.preventDefault(); setOverIndex(index); };
   const handleDrop = (e, index) => {
     e.preventDefault();
-    if (dragIndex !== null && dragIndex !== index) {
-      onReorder(dragIndex, index);
-    }
-    setDragIndex(null);
-    setOverIndex(null);
+    if (dragIndex !== null && dragIndex !== index) onReorder(dragIndex, index);
+    setDragIndex(null); setOverIndex(null);
   };
-
-  const handleDragEnd = () => {
-    setDragIndex(null);
-    setOverIndex(null);
-  };
+  const handleDragEnd = () => { setDragIndex(null); setOverIndex(null); };
 
   // --- Touch drag ---
   const handleTouchStartDrag = (e, index) => {
@@ -57,44 +49,56 @@ export default function DraggableButtonGrid({ items, onReorder, onEvent, categor
     touchDragRef.current = { startY: t.clientY, startX: t.clientX, index };
     setDragIndex(index);
   };
-
   const handleTouchMoveDrag = (e) => {
     if (!editMode || dragIndex === null) return;
     e.preventDefault();
     const t = e.touches[0];
     const el = document.elementFromPoint(t.clientX, t.clientY);
     const btn = el?.closest('[data-btn-index]');
-    if (btn) {
-      const idx = parseInt(btn.getAttribute('data-btn-index'));
-      setOverIndex(idx);
-    }
+    if (btn) setOverIndex(parseInt(btn.getAttribute('data-btn-index')));
   };
-
   const handleTouchEndDrag = () => {
-    if (dragIndex !== null && overIndex !== null && dragIndex !== overIndex) {
-      onReorder(dragIndex, overIndex);
-    }
-    setDragIndex(null);
-    setOverIndex(null);
+    if (dragIndex !== null && overIndex !== null && dragIndex !== overIndex) onReorder(dragIndex, overIndex);
+    setDragIndex(null); setOverIndex(null);
   };
 
   return (
     <>
-      {/* Edit mode bar */}
-      {editMode && (
-        <div className="flex items-center justify-between mb-3 px-1">
-          <span className="text-xs text-amber-400 font-semibold animate-pulse">✦ Drag to reorder</span>
-          <div className="flex gap-2">
+      {/* Toolbar — always visible */}
+      <div className="flex items-center gap-2 mb-3">
+        {editMode ? (
+          <>
+            <span className="text-xs text-amber-400 font-semibold animate-pulse flex-1">✦ Drag to reorder</span>
+            <button
+              onClick={() => setShowAddCustom(true)}
+              className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg bg-primary/10 border border-primary/30 text-primary hover:bg-primary/20 btn-tap"
+            >
+              <PlusCircle className="w-3.5 h-3.5" />
+              Add Custom
+            </button>
             <button
               onClick={() => setEditMode(false)}
-              className="text-xs px-3 py-1 rounded-lg bg-secondary border border-border text-foreground btn-tap"
+              className="text-xs px-3 py-1.5 rounded-lg bg-secondary border border-border text-foreground btn-tap"
             >
               Done
             </button>
-          </div>
-        </div>
-      )}
+          </>
+        ) : (
+          <>
+            <span className="text-xs text-muted-foreground flex-1">Hold button to reorder</span>
+            <button
+              onClick={onBugReport}
+              className="flex items-center gap-1 text-xs px-2.5 py-1.5 rounded-lg bg-secondary border border-border text-muted-foreground hover:text-foreground btn-tap"
+              title="Bug Report"
+            >
+              <Bug className="w-3.5 h-3.5" />
+              Bug
+            </button>
+          </>
+        )}
+      </div>
 
+      {/* Grid */}
       <div
         className="grid grid-cols-2 gap-2"
         onTouchMove={handleTouchMoveDrag}
@@ -109,31 +113,37 @@ export default function DraggableButtonGrid({ items, onReorder, onEvent, categor
             onDragOver={e => handleDragOver(e, index)}
             onDrop={e => handleDrop(e, index)}
             onDragEnd={handleDragEnd}
-            onTouchStart={e => {
-              if (editMode) handleTouchStartDrag(e, index);
-            }}
-            className={`relative transition-all duration-150 ${
-              overIndex === index && dragIndex !== index ? 'scale-105 opacity-70' : ''
-            } ${dragIndex === index ? 'opacity-40' : ''}`}
+            onTouchStart={e => { if (editMode) handleTouchStartDrag(e, index); }}
+            className={`relative transition-all duration-150 ${overIndex === index && dragIndex !== index ? 'scale-105 opacity-70' : ''} ${dragIndex === index ? 'opacity-40' : ''}`}
           >
             {editMode ? (
-              /* Edit mode: show grab handle + learn button */
               <div className={`${buttonClass} py-3 px-3 rounded-xl text-sm font-semibold border flex items-center justify-between gap-1 select-none cursor-grab active:cursor-grabbing`}>
                 <div className="flex items-center gap-1 min-w-0">
                   <GripVertical className="w-4 h-4 shrink-0 opacity-50" />
                   <span className="truncate">{item.label}</span>
                 </div>
-                <button
-                  onPointerDown={e => e.stopPropagation()}
-                  onClick={e => { e.stopPropagation(); setLearnItem(item); }}
-                  className="shrink-0 p-1 rounded-lg bg-primary/20 hover:bg-primary/40 btn-tap"
-                  title="Teach voice"
-                >
-                  <BookOpen className="w-3.5 h-3.5 text-primary" />
-                </button>
+                <div className="flex items-center gap-1 shrink-0">
+                  <button
+                    onPointerDown={e => e.stopPropagation()}
+                    onClick={e => { e.stopPropagation(); setLearnItem(item); }}
+                    className="p-1 rounded-lg bg-primary/20 hover:bg-primary/40 btn-tap"
+                    title="Teach voice"
+                  >
+                    <BookOpen className="w-3.5 h-3.5 text-primary" />
+                  </button>
+                  {item.custom && (
+                    <button
+                      onPointerDown={e => e.stopPropagation()}
+                      onClick={e => { e.stopPropagation(); onRemoveItem(item); }}
+                      className="p-1 rounded-lg bg-destructive/20 hover:bg-destructive/40 btn-tap"
+                      title="Remove"
+                    >
+                      <X className="w-3.5 h-3.5 text-destructive" />
+                    </button>
+                  )}
+                </div>
               </div>
             ) : (
-              /* Normal mode: long-pressable action button */
               <button
                 {...longPressHandlers}
                 onClick={() => onEvent(item.label, category)}
@@ -146,8 +156,16 @@ export default function DraggableButtonGrid({ items, onReorder, onEvent, categor
         ))}
       </div>
 
-      {learnItem && (
-        <LearnModal item={learnItem} onClose={() => setLearnItem(null)} />
+      {learnItem && <LearnModal item={learnItem} onClose={() => setLearnItem(null)} />}
+
+      {showAddCustom && (
+        <AddCustomButtonModal
+          category={category}
+          existing={items}
+          onAdd={(btn) => { onAddItem(btn); }}
+          onDelete={(btn) => { onRemoveItem(btn); }}
+          onClose={() => setShowAddCustom(false)}
+        />
       )}
     </>
   );

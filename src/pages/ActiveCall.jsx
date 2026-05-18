@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
-import { Heart, Syringe, Activity, ChevronLeft, FileText, Plus, Bug } from 'lucide-react';
+import { Heart, Syringe, Activity, ChevronLeft, FileText, Plus } from 'lucide-react';
 import { getCall, saveCall, createNewCall } from '@/lib/callStorage';
 import { startVoiceRecognition, stopVoiceRecognition } from '@/lib/voiceRecognition';
 import CallTimer from '@/components/emit/CallTimer';
@@ -408,25 +408,18 @@ export default function ActiveCall() {
       {/* Tab Content */}
       <div className="flex-1 overflow-y-auto px-4 py-3 pb-6">
         {activeTab === 'interventions' && (
-          <InterventionPanel onEvent={addEvent} />
+          <InterventionPanel onEvent={addEvent} onBugReport={() => setShowBugReport(true)} />
         )}
         {activeTab === 'medications' && (
-          <MedicationPanel onEvent={addEvent} />
+          <MedicationPanel onEvent={addEvent} onBugReport={() => setShowBugReport(true)} />
         )}
         {activeTab === 'log' && (
           <EventLog events={call.events} />
         )}
       </div>
 
-      {/* FABs */}
-      <div className="fixed bottom-6 right-6 flex flex-col gap-3">
-        <button
-          onClick={() => setShowBugReport(true)}
-          className="w-12 h-12 rounded-full bg-secondary border border-border flex items-center justify-center shadow-lg hover:border-primary/50 btn-tap transition-all"
-          title="Log Bug Report"
-        >
-          <Bug className="w-5 h-5 text-muted-foreground" />
-        </button>
+      {/* Quick Note FAB */}
+      <div className="fixed bottom-6 right-6">
         <button
           onClick={() => {
             const note = prompt('Quick note:');
