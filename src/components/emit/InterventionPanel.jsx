@@ -18,7 +18,8 @@ export default function InterventionPanel({ onEvent, onBugReport }) {
         onEvent={onEvent}
         onAddItem={addItem}
         onRemoveItem={removeItem}
-        category="intervention"
+        category="interventions"
+        eventCategory="intervention"
         buttonClass="border-blue-500/30 bg-blue-500/10 text-blue-200 hover:bg-blue-500/25 hover:border-blue-400"
         onBugReport={onBugReport}
       />

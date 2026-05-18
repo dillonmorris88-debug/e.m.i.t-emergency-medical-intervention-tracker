@@ -18,7 +18,8 @@ export default function MedicationPanel({ onEvent, onBugReport }) {
         onEvent={onEvent}
         onAddItem={addItem}
         onRemoveItem={removeItem}
-        category="medication"
+        category="medications"
+        eventCategory="medication"
         buttonClass="border-amber-500/30 bg-amber-500/10 text-amber-200 hover:bg-amber-500/25 hover:border-amber-400"
         onBugReport={onBugReport}
       />

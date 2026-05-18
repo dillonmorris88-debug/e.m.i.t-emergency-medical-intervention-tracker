@@ -8,14 +8,15 @@ import AddCustomButtonModal from '@/components/emit/AddCustomButtonModal';
  * Props:
  *  items        - array of { key, label, custom? }
  *  onReorder    - (fromIndex, toIndex) => void
- *  onEvent      - (label, category) => void
+ *  onEvent      - (label, eventCategory) => void
  *  onAddItem    - (item) => void
  *  onRemoveItem - (item) => void
- *  category     - 'intervention' | 'medication'
+ *  category     - storage key, e.g. 'interventions' | 'medications'
+ *  eventCategory - singular form for event log, e.g. 'intervention' | 'medication'
  *  buttonClass  - tailwind classes for the button
  *  onBugReport  - () => void
  */
-export default function DraggableButtonGrid({ items, onReorder, onEvent, onAddItem, onRemoveItem, category, buttonClass, onBugReport }) {
+export default function DraggableButtonGrid({ items, onReorder, onEvent, onAddItem, onRemoveItem, category, eventCategory, buttonClass, onBugReport }) {
   const [editMode, setEditMode] = useState(false);
   const [learnItem, setLearnItem] = useState(null);
   const [showAddCustom, setShowAddCustom] = useState(false);
@@ -146,7 +147,7 @@ export default function DraggableButtonGrid({ items, onReorder, onEvent, onAddIt
             ) : (
               <button
                 {...longPressHandlers}
-                onClick={() => onEvent(item.label, category)}
+                onClick={() => onEvent(item.label, eventCategory || category)}
                 className={`w-full ${buttonClass} py-3 px-3 rounded-xl text-sm font-semibold border btn-tap transition-all text-left`}
               >
                 {item.label}
