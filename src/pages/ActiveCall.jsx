@@ -10,6 +10,8 @@ import MedicationPanel from '@/components/emit/MedicationPanel';
 import EventLog from '@/components/emit/EventLog';
 import VoiceIndicator from '@/components/emit/VoiceIndicator';
 import BugReportModal from '@/components/emit/BugReportModal';
+import { getVoiceAliases } from '@/hooks/useVoiceAliases';
+import { INTERVENTIONS, MEDICATIONS } from '@/lib/eventData';
 
 const TABS = [
   { key: 'interventions', label: 'Interventions', icon: Syringe, color: 'text-blue-400' },
@@ -163,6 +165,18 @@ export default function ActiveCall() {
 
   const handleVoiceCommand = useCallback((cmd) => {
     const t = cmd.toLowerCase();
+
+    // Check user-taught aliases first
+    const aliases = getVoiceAliases();
+    const allItems = [...INTERVENTIONS, ...MEDICATIONS];
+    for (const item of allItems) {
+      const itemAliases = aliases[item.key] || [];
+      if (itemAliases.some(phrase => t.includes(phrase))) {
+        const cat = INTERVENTIONS.find(i => i.key === item.key) ? 'intervention' : 'medication';
+        addEvent(item.label, cat);
+        return;
+      }
+    }
 
     // --- Interventions ---
     if (t.includes('iv') || t.includes('intravenous') || t.includes('i.v')) {
