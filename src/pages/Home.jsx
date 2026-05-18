@@ -1,7 +1,7 @@
 import { useNavigate } from 'react-router-dom';
 import { useEffect, useState } from 'react';
 import { getAllCalls, createNewCall, saveCall } from '@/lib/callStorage';
-import { Plus, Clock, Heart, ChevronRight } from 'lucide-react';
+import { Plus, Clock, Heart, ChevronRight, Bot } from 'lucide-react';
 import { format } from 'date-fns';
 
 export default function Home() {

@@ -8,6 +8,7 @@ import UserNotRegisteredError from '@/components/UserNotRegisteredError';
 import Home from '@/pages/Home';
 import ActiveCall from '@/pages/ActiveCall';
 import CallHistory from '@/pages/CallHistory';
+import Scribe from '@/pages/Scribe';
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
@@ -35,6 +36,7 @@ const AuthenticatedApp = () => {
       <Route path="/call" element={<ActiveCall />} />
       <Route path="/call/:callId" element={<ActiveCall />} />
       <Route path="/history" element={<CallHistory />} />
+      <Route path="/scribe" element={<Scribe />} />
       <Route path="*" element={<PageNotFound />} />
     </Routes>
   );
