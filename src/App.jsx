@@ -14,6 +14,15 @@ import Register from '@/pages/Register';
 import ForgotPassword from '@/pages/ForgotPassword';
 import ResetPassword from '@/pages/ResetPassword';
 import ProtectedRoute from '@/components/ProtectedRoute';
+import PrivacyPolicy from '@/pages/PrivacyPolicy';
+
+const PrivacyGate = ({ children }) => {
+  const accepted = localStorage.getItem('emit_privacy_accepted') === 'true';
+  if (!accepted) {
+    return <Navigate to="/privacy-policy" replace />;
+  }
+  return children;
+};
 
 const AuthenticatedApp = () => {
   const { isLoadingAuth, isLoadingPublicSettings, authError, navigateToLogin } = useAuth();
@@ -41,12 +50,13 @@ const AuthenticatedApp = () => {
       <Route path="/register" element={<Register />} />
       <Route path="/forgot-password" element={<ForgotPassword />} />
       <Route path="/reset-password" element={<ResetPassword />} />
+      <Route path="/privacy-policy" element={<PrivacyPolicy />} />
       <Route element={<ProtectedRoute unauthenticatedElement={<Navigate to="/login" replace />} />}>
-        <Route path="/" element={<Home />} />
-        <Route path="/call" element={<ActiveCall />} />
-        <Route path="/call/:callId" element={<ActiveCall />} />
-        <Route path="/history" element={<CallHistory />} />
-        <Route path="/scribe" element={<Scribe />} />
+        <Route path="/" element={<PrivacyGate><Home /></PrivacyGate>} />
+        <Route path="/call" element={<PrivacyGate><ActiveCall /></PrivacyGate>} />
+        <Route path="/call/:callId" element={<PrivacyGate><ActiveCall /></PrivacyGate>} />
+        <Route path="/history" element={<PrivacyGate><CallHistory /></PrivacyGate>} />
+        <Route path="/scribe" element={<PrivacyGate><Scribe /></PrivacyGate>} />
       </Route>
       <Route path="*" element={<PageNotFound />} />
     </Routes>
