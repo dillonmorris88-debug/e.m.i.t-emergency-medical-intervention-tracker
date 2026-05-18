@@ -70,6 +70,10 @@ export default function Register() {
     base44.auth.loginWithProvider("google", "/");
   };
 
+  const handleApple = () => {
+    base44.auth.loginWithProvider("apple", "/");
+  };
+
   if (showOtp) {
     return (
       <AuthLayout
@@ -138,14 +142,26 @@ export default function Register() {
         </>
       }
     >
-      <Button
-        variant="outline"
-        className="w-full h-12 text-sm font-medium mb-6"
-        onClick={handleGoogle}
-      >
-        <GoogleIcon className="w-5 h-5 mr-2" />
-        Continue with Google
-      </Button>
+      <div className="space-y-3 mb-6">
+        <Button
+          variant="outline"
+          className="w-full h-12 text-sm font-medium"
+          onClick={handleGoogle}
+        >
+          <GoogleIcon className="w-5 h-5 mr-2" />
+          Continue with Google
+        </Button>
+        <Button
+          variant="outline"
+          className="w-full h-12 text-sm font-medium"
+          onClick={handleApple}
+        >
+          <svg className="w-5 h-5 mr-2" viewBox="0 0 24 24" fill="currentColor">
+            <path d="M17.05 20.28c-.98.95-2.05.8-3.08.35-1.09-.46-2.09-.48-3.24 0-1.44.62-2.2.44-3.06-.35C2.79 15.25 3.51 7.7 9.05 7.4c1.39.07 2.36.74 3.17.78 1.21-.24 2.37-.93 3.67-.84 1.57.12 2.75.72 3.51 1.87-3.22 1.93-2.45 6.17.59 7.35-.69 1.77-1.57 3.52-2.94 4.72M12.03 7.25c-.15-2.23 1.66-4.07 3.74-4.25.29 2.58-2.34 4.5-3.74 4.25" />
+          </svg>
+          Continue with Apple
+        </Button>
+      </div>
 
       <div className="relative mb-6">
         <div className="absolute inset-0 flex items-center">
