@@ -16,6 +16,7 @@ import { getVoiceAliases } from '@/hooks/useVoiceAliases';
 import { INTERVENTIONS, MEDICATIONS } from '@/lib/eventData';
 import { matchVoiceCommand, matchVoiceCommandNLU } from '@/lib/voiceCommandMatcher';
 import { base44 } from '@/api/base44Client';
+import { speak } from '@/lib/speak';
 
 const TABS = [
   { key: 'interventions', label: 'Interventions', icon: Syringe, color: 'text-blue-400' },
@@ -76,6 +77,7 @@ export default function ActiveCall() {
       saveCall(updated);
       return updated;
     });
+    speak(label);
   }, []);
 
   const startCPR = useCallback(() => {
@@ -96,6 +98,7 @@ export default function ActiveCall() {
       saveCall(withEvent);
       return withEvent;
     });
+    speak('CPR started');
   }, []);
 
   const handleROSC = useCallback(() => {
@@ -116,6 +119,7 @@ export default function ActiveCall() {
       saveCall(withEvent);
       return withEvent;
     });
+    speak('ROSC');
   }, []);
 
   const handleDiscontinue = useCallback(() => {
@@ -136,6 +140,7 @@ export default function ActiveCall() {
       saveCall(withEvent);
       return withEvent;
     });
+    speak('Efforts discontinued');
   }, []);
 
   const markRhythm = useCallback((rhythm) => {
@@ -156,6 +161,7 @@ export default function ActiveCall() {
       saveCall(withEvent);
       return withEvent;
     });
+    speak(`Rhythm: ${rhythm}`);
   }, []);
 
   const handleEndCall = useCallback(() => {
