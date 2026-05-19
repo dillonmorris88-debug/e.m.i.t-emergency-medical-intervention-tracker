@@ -3,13 +3,25 @@ import { useEffect, useState } from 'react';
 import { getAllCalls, createNewCall, saveCall } from '@/lib/callStorage';
 import { Plus, Clock, Heart, ChevronRight, Bot } from 'lucide-react';
 import { format } from 'date-fns';
+import { autoSync, getPendingCount } from '@/lib/syncService';
+import SyncIndicator from '@/components/emit/SyncIndicator';
 
 export default function Home() {
   const navigate = useNavigate();
   const [recentCalls, setRecentCalls] = useState([]);
+  const [syncStatus, setSyncStatus] = useState(navigator.onLine ? 'syncing' : 'offline');
 
   useEffect(() => {
     setRecentCalls(getAllCalls().slice(0, 3));
+  }, []);
+
+  useEffect(() => {
+    // Show pending badge immediately if there are unsynced calls
+    if (navigator.onLine && getPendingCount() > 0) setSyncStatus('pending');
+    const unsub = autoSync((status) => {
+      setSyncStatus(status);
+    });
+    return unsub;
   }, []);
 
   const startNewCall = () => {
@@ -32,6 +44,9 @@ export default function Home() {
               Emergency Medical Intervention Tracker
             </span>
           </h1>
+          <div className="mt-3">
+            <SyncIndicator status={syncStatus} pendingCount={getPendingCount()} />
+          </div>
         </div>
 
         <button

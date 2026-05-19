@@ -1,6 +1,8 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import { useNavigate, useParams } from 'react-router-dom';
 import { Heart, Syringe, Activity, ChevronLeft, FileText, Plus } from 'lucide-react';
+import { autoSync, getPendingCount } from '@/lib/syncService';
+import SyncIndicator from '@/components/emit/SyncIndicator';
 import { getCall, saveCall, createNewCall } from '@/lib/callStorage';
 import { startVoiceRecognition, stopVoiceRecognition } from '@/lib/voiceRecognition';
 import CallTimer from '@/components/emit/CallTimer';
@@ -32,6 +34,7 @@ export default function ActiveCall() {
   const wakeTimerRef = useRef(null);
   const voiceCommandRef = useRef(null);
   const [showBugReport, setShowBugReport] = useState(false);
+  const [syncStatus, setSyncStatus] = useState(navigator.onLine ? 'syncing' : 'offline');
 
   useEffect(() => {
     let c = callId ? getCall(callId) : null;
@@ -306,6 +309,12 @@ export default function ActiveCall() {
     voiceCommandRef.current = handleVoiceCommand;
   }, [handleVoiceCommand]);
 
+  // Sync status watcher
+  useEffect(() => {
+    const unsub = autoSync((status) => setSyncStatus(status));
+    return unsub;
+  }, []);
+
   const toggleListening = useCallback(() => {
     if (listening) stopListening();
     else startListening();
@@ -334,9 +343,10 @@ export default function ActiveCall() {
           <ChevronLeft className="w-5 h-5" />
           <span className="text-sm">Calls</span>
         </button>
-        <div className="flex flex-col items-center">
+        <div className="flex flex-col items-center gap-1">
           <span className="text-xs font-bold tracking-[0.2em] text-primary uppercase">E.M.i.T.</span>
           <CallTimer startedAt={call.started_at} />
+          <SyncIndicator status={syncStatus} pendingCount={getPendingCount()} />
         </div>
         <button
           onClick={handleEndCall}

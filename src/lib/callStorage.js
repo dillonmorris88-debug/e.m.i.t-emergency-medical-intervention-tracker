@@ -1,3 +1,5 @@
+import { markPending } from '@/lib/syncService';
+
 const STORAGE_KEY = 'emit_calls';
 const MAX_CALLS = 10;
 
@@ -22,6 +24,7 @@ export function saveCall(call) {
     }
   }
   localStorage.setItem(STORAGE_KEY, JSON.stringify(calls));
+  markPending(call.id);
 }
 
 export function deleteCall(id) {
