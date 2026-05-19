@@ -3,7 +3,7 @@ import { MEDICATIONS } from '@/lib/eventData';
 import { useButtonLayout } from '@/hooks/useButtonLayout';
 import DraggableButtonGrid from '@/components/emit/DraggableButtonGrid';
 
-export default function MedicationPanel({ onEvent, onBugReport }) {
+export default function MedicationPanel({ onEvent, onBugReport, onVoicePause, onVoiceResume }) {
   const { items, reorder, addItem, removeItem } = useButtonLayout('medications', MEDICATIONS);
 
   return (
@@ -22,6 +22,8 @@ export default function MedicationPanel({ onEvent, onBugReport }) {
         eventCategory="medication"
         buttonClass="border-amber-500/30 bg-amber-500/10 text-amber-200 hover:bg-amber-500/25 hover:border-amber-400"
         onBugReport={onBugReport}
+        onVoicePause={onVoicePause}
+        onVoiceResume={onVoiceResume}
       />
     </div>
   );

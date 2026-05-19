@@ -16,7 +16,7 @@ import AddCustomButtonModal from '@/components/emit/AddCustomButtonModal';
  *  buttonClass  - tailwind classes for the button
  *  onBugReport  - () => void
  */
-export default function DraggableButtonGrid({ items, onReorder, onEvent, onAddItem, onRemoveItem, category, eventCategory, buttonClass, onBugReport }) {
+export default function DraggableButtonGrid({ items, onReorder, onEvent, onAddItem, onRemoveItem, category, eventCategory, buttonClass, onBugReport, onVoicePause, onVoiceResume }) {
   const [editMode, setEditMode] = useState(false);
   const [learnItem, setLearnItem] = useState(null);
   const [showAddCustom, setShowAddCustom] = useState(false);
@@ -157,7 +157,13 @@ export default function DraggableButtonGrid({ items, onReorder, onEvent, onAddIt
         ))}
       </div>
 
-      {learnItem && <LearnModal item={learnItem} onClose={() => setLearnItem(null)} />}
+      {learnItem && (
+        <LearnModal
+          item={learnItem}
+          onClose={() => { setLearnItem(null); onVoiceResume?.(); }}
+          onOpen={() => onVoicePause?.()}
+        />
+      )}
 
       {showAddCustom && (
         <AddCustomButtonModal

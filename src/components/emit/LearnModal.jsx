@@ -3,7 +3,7 @@ import { Mic, MicOff, X, Plus, Trash2, BookOpen, CheckCircle2 } from 'lucide-rea
 import { Button } from '@/components/ui/button';
 import { getVoiceAliases, saveVoiceAlias, removeVoiceAlias } from '@/hooks/useVoiceAliases';
 
-export default function LearnModal({ item, onClose }) {
+export default function LearnModal({ item, onClose, onOpen }) {
   const [aliases, setAliases] = useState(() => getVoiceAliases()[item.key] || []);
   const [recording, setRecording] = useState(false);
   const [liveText, setLiveText] = useState('');
@@ -11,6 +11,7 @@ export default function LearnModal({ item, onClose }) {
   const recognitionRef = useRef(null);
 
   useEffect(() => {
+    onOpen?.();
     return () => recognitionRef.current?.stop();
   }, []);
 

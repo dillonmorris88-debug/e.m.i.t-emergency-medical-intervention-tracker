@@ -339,10 +339,10 @@ export default function ActiveCall() {
       {/* Tab Content */}
       <div className="flex-1 overflow-y-auto px-4 py-3 pb-6">
         {activeTab === 'interventions' && (
-          <InterventionPanel onEvent={addEvent} onBugReport={() => setShowBugReport(true)} />
+          <InterventionPanel onEvent={addEvent} onBugReport={() => setShowBugReport(true)} onVoicePause={stopListening} onVoiceResume={startListening} />
         )}
         {activeTab === 'medications' && (
-          <MedicationPanel onEvent={addEvent} onBugReport={() => setShowBugReport(true)} />
+          <MedicationPanel onEvent={addEvent} onBugReport={() => setShowBugReport(true)} onVoicePause={stopListening} onVoiceResume={startListening} />
         )}
         {activeTab === 'log' && (
           <EventLog events={call.events} />
