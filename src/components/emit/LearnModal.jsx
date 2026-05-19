@@ -12,10 +12,19 @@ export default function LearnModal({ item, onClose, onOpen }) {
 
   useEffect(() => {
     onOpen?.();
-    return () => recognitionRef.current?.stop();
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.onend = null;
+        recognitionRef.current.onerror = null;
+        recognitionRef.current.onresult = null;
+        try { recognitionRef.current.abort(); } catch {}
+        recognitionRef.current = null;
+      }
+    };
   }, []);
 
   const startRecording = () => {
+    if (recognitionRef.current) return; // prevent double-start
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
     if (!SR) return;
     const r = new SR();
@@ -28,21 +37,37 @@ export default function LearnModal({ item, onClose, onOpen }) {
         .join('');
       setLiveText(transcript);
       if (e.results[e.results.length - 1].isFinal) {
-        addAlias(transcript.trim().toLowerCase());
-        setRecording(false);
+        const phrase = transcript.trim().toLowerCase();
+        r.onend = null; // prevent onend from resetting state after we handle it
         recognitionRef.current = null;
+        setRecording(false);
+        setLiveText('');
+        addAlias(phrase);
       }
     };
-    r.onerror = () => { setRecording(false); recognitionRef.current = null; };
-    r.onend = () => { setRecording(false); setLiveText(''); };
+    r.onerror = () => {
+      recognitionRef.current = null;
+      setRecording(false);
+      setLiveText('');
+    };
+    r.onend = () => {
+      recognitionRef.current = null;
+      setRecording(false);
+      setLiveText('');
+    };
     recognitionRef.current = r;
-    r.start();
+    try { r.start(); } catch { recognitionRef.current = null; return; }
     setRecording(true);
     setLiveText('');
   };
 
   const stopRecording = () => {
-    recognitionRef.current?.stop();
+    if (!recognitionRef.current) return;
+    recognitionRef.current.onend = null;
+    recognitionRef.current.onerror = null;
+    recognitionRef.current.onresult = null;
+    try { recognitionRef.current.abort(); } catch {}
+    recognitionRef.current = null;
     setRecording(false);
     setLiveText('');
   };
@@ -104,9 +129,7 @@ export default function LearnModal({ item, onClose, onOpen }) {
 
         {/* Record Button */}
         <button
-          onMouseDown={recording ? undefined : startRecording}
-          onTouchStart={recording ? undefined : startRecording}
-          onClick={recording ? stopRecording : undefined}
+          onClick={recording ? stopRecording : startRecording}
           className={`w-full flex items-center justify-center gap-3 py-4 rounded-2xl font-bold text-base border-2 btn-tap transition-all mb-4 ${
             recording
               ? 'border-red-500/80 bg-red-500/15 text-red-300 pulse-red'

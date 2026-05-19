@@ -77,7 +77,9 @@ export function startVoiceRecognition(onWakeWord, onResult, onInterim) {
 
 export function stopVoiceRecognition(recognition) {
   if (recognition) {
-    recognition.onend = null; // Prevent auto-restart
-    try { recognition.stop(); } catch {}
+    recognition.onend = null;
+    recognition.onerror = null;
+    recognition.onresult = null;
+    try { recognition.abort(); } catch {}
   }
 }
