@@ -1,6 +1,6 @@
 import { createClientFromRequest } from 'npm:@base44/sdk@0.8.25';
 
-const GITHUB_LOGIN = 'Dillonmorris-debug';
+const GITHUB_LOGIN = 'Dillonmorris88-debug';
 const PROJECT_NUMBER = 1;
 
 Deno.serve(async (req) => {
