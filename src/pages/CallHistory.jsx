@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getAllCalls, deleteCall } from '@/lib/callStorage';
 import { format, formatDuration, intervalToDuration } from 'date-fns';
-import { Clock, Trash2, ChevronRight, Heart, Activity } from 'lucide-react';
+import { Clock, Trash2, ChevronRight, Heart, Activity, ChevronLeft } from 'lucide-react';
 import { CATEGORY_COLORS } from '@/lib/eventData';
 
 export default function CallHistory() {
@@ -33,6 +33,10 @@ export default function CallHistory() {
   return (
     <div className="min-h-screen bg-background max-w-lg mx-auto px-4 py-6">
       <div className="mb-6">
+        <button onClick={() => navigate('/')} className="flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors btn-tap mb-3">
+          <ChevronLeft className="w-5 h-5" />
+          <span className="text-sm">Home</span>
+        </button>
         <span className="text-xs font-bold tracking-[0.2em] text-primary uppercase">E.M.i.T.</span>
         <h2 className="text-xl font-bold text-foreground mt-1">Call History</h2>
         <p className="text-xs text-muted-foreground mt-0.5">Last {calls.length} of 10 calls</p>
