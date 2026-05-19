@@ -12,11 +12,13 @@ Deno.serve(async (req) => {
       query {
         viewer {
           login
-          projectsV2(first: 20) {
-            nodes {
-              id
-              number
-              title
+          repository(name: "E.M.i.T") {
+            projectsV2(first: 20) {
+              nodes {
+                id
+                number
+                title
+              }
             }
           }
         }
