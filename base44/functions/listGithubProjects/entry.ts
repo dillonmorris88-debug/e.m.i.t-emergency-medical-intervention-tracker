@@ -10,7 +10,8 @@ Deno.serve(async (req) => {
 
     const query = `
       query {
-        user(login: "Dillonmorris88-debug") {
+        viewer {
+          login
           projectsV2(first: 20) {
             nodes {
               id
