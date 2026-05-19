@@ -163,6 +163,8 @@ export default function ActiveCall() {
       if (!prev) return prev;
       const updated = { ...prev, ended_at: new Date().toISOString() };
       saveCall(updated);
+      // Fire-and-forget sync to GitHub Project Board
+      base44.functions.invoke('syncToGithubProject', { call: updated }).catch(() => {});
       return updated;
     });
     navigate('/');

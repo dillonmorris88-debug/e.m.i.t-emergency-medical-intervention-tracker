@@ -2,16 +2,31 @@ import { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { getAllCalls, deleteCall } from '@/lib/callStorage';
 import { format, formatDuration, intervalToDuration } from 'date-fns';
-import { Clock, Trash2, ChevronRight, Heart, Activity, ChevronLeft } from 'lucide-react';
+import { Clock, Trash2, ChevronRight, Heart, Activity, ChevronLeft, GitBranch, Check, Loader2 } from 'lucide-react';
 import { CATEGORY_COLORS } from '@/lib/eventData';
+import { base44 } from '@/api/base44Client';
 
 export default function CallHistory() {
   const [calls, setCalls] = useState([]);
+  const [syncingId, setSyncingId] = useState(null);
+  const [syncedIds, setSyncedIds] = useState({});
   const navigate = useNavigate();
 
   useEffect(() => {
     setCalls(getAllCalls());
   }, []);
+
+  const handleSync = async (call, e) => {
+    e.stopPropagation();
+    setSyncingId(call.id);
+    const res = await base44.functions.invoke('syncToGithubProject', { call });
+    setSyncingId(null);
+    if (res.data?.success) {
+      setSyncedIds(prev => ({ ...prev, [call.id]: true }));
+    } else {
+      alert('Sync failed: ' + (res.data?.error || 'Unknown error'));
+    }
+  };
 
   const handleDelete = (id, e) => {
     e.stopPropagation();
@@ -94,6 +109,20 @@ export default function CallHistory() {
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
+                  <button
+                    onClick={(e) => handleSync(call, e)}
+                    disabled={syncingId === call.id}
+                    className="p-1.5 rounded-lg text-muted-foreground hover:text-primary hover:bg-primary/10 btn-tap transition-colors disabled:opacity-50"
+                    title="Sync to GitHub Project"
+                  >
+                    {syncingId === call.id ? (
+                      <Loader2 className="w-4 h-4 animate-spin" />
+                    ) : syncedIds[call.id] ? (
+                      <Check className="w-4 h-4 text-green-400" />
+                    ) : (
+                      <GitBranch className="w-4 h-4" />
+                    )}
+                  </button>
                   <button
                     onClick={(e) => handleDelete(call.id, e)}
                     className="p-1.5 rounded-lg text-muted-foreground hover:text-destructive hover:bg-destructive/10 btn-tap transition-colors"
