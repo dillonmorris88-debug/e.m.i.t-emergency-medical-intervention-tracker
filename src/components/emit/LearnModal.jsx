@@ -79,9 +79,27 @@ export default function LearnModal({ item, onClose }) {
           </button>
         </div>
         <h2 className="text-xl font-black text-foreground mb-1">{item.label}</h2>
-        <p className="text-xs text-muted-foreground mb-5">
+        <p className="text-xs text-muted-foreground mb-3">
           Teach the app how you say this. Press the mic and speak naturally — your phrase will be saved and used for voice recognition.
         </p>
+
+        {/* Suggested phrases */}
+        <div className="mb-4 p-3 rounded-xl bg-secondary border border-border">
+          <p className="text-xs font-semibold text-muted-foreground uppercase tracking-wider mb-2">Try saying something like…</p>
+          <div className="flex flex-wrap gap-1.5">
+            {[
+              `"${item.label.toLowerCase()}"`,
+              `"give ${item.label.toLowerCase()}"`,
+              `"pushed ${item.label.toLowerCase()}"`,
+              `"log ${item.label.toLowerCase()}"`,
+              `"administer ${item.label.toLowerCase()}"`,
+            ].map(phrase => (
+              <span key={phrase} className="text-xs font-mono px-2 py-0.5 rounded-lg bg-primary/10 border border-primary/20 text-primary/80">
+                {phrase}
+              </span>
+            ))}
+          </div>
+        </div>
 
         {/* Record Button */}
         <button

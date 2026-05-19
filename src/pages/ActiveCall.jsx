@@ -14,7 +14,8 @@ import VoiceIndicator from '@/components/emit/VoiceIndicator';
 import BugReportModal from '@/components/emit/BugReportModal';
 import { getVoiceAliases } from '@/hooks/useVoiceAliases';
 import { INTERVENTIONS, MEDICATIONS } from '@/lib/eventData';
-import { matchVoiceCommand } from '@/lib/voiceCommandMatcher';
+import { matchVoiceCommand, matchVoiceCommandNLU } from '@/lib/voiceCommandMatcher';
+import { base44 } from '@/api/base44Client';
 
 const TABS = [
   { key: 'interventions', label: 'Interventions', icon: Syringe, color: 'text-blue-400' },
@@ -36,6 +37,8 @@ export default function ActiveCall() {
   const voiceCommandRef = useRef(null);
   const [showBugReport, setShowBugReport] = useState(false);
   const [syncStatus, setSyncStatus] = useState(navigator.onLine ? 'syncing' : 'offline');
+  const [nluProcessing, setNluProcessing] = useState(false);
+  const [lastMatchedLabel, setLastMatchedLabel] = useState('');
 
   useEffect(() => {
     let c = callId ? getCall(callId) : null;
@@ -167,22 +170,36 @@ export default function ActiveCall() {
 
   // --- Voice handlers defined AFTER their dependencies ---
 
-  const handleVoiceCommand = useCallback((cmd) => {
-    const aliases = getVoiceAliases();
-    const match = matchVoiceCommand(cmd, aliases, INTERVENTIONS, MEDICATIONS);
+  const applyMatch = useCallback((match) => {
     if (!match) return;
-    if (match.type === 'cpr') { startCPR(); return; }
-    if (match.type === 'rosc') { handleROSC(); return; }
+    if (match.type === 'cpr') { startCPR(); setLastMatchedLabel('CPR Started'); return; }
+    if (match.type === 'rosc') { handleROSC(); setLastMatchedLabel('ROSC'); return; }
     if (match.type === 'event') {
+      setLastMatchedLabel(match.label);
       if (match.category === 'rhythm') { markRhythm(match.label); return; }
       addEvent(match.label, match.category);
     }
   }, [addEvent, startCPR, handleROSC, markRhythm]);
 
+  const handleVoiceCommand = useCallback(async (cmd) => {
+    const aliases = getVoiceAliases();
+    const match = matchVoiceCommand(cmd, aliases, INTERVENTIONS, MEDICATIONS);
+    if (match) { applyMatch(match); return; }
+    // NLU fallback — only when keyword matching fails
+    setNluProcessing(true);
+    const nluMatch = await matchVoiceCommandNLU(
+      cmd, INTERVENTIONS, MEDICATIONS,
+      (params) => base44.integrations.Core.InvokeLLM(params)
+    );
+    setNluProcessing(false);
+    applyMatch(nluMatch);
+  }, [applyMatch]);
+
   const startListening = useCallback(() => {
     recognitionRef.current = startVoiceRecognition(
       () => {
         setLastCommand('');
+        setLastMatchedLabel('');
         setWakeWordDetected(true);
         clearTimeout(wakeTimerRef.current);
         wakeTimerRef.current = setTimeout(() => setWakeWordDetected(false), 1500);
@@ -266,6 +283,8 @@ export default function ActiveCall() {
           liveTranscript={liveTranscript}
           wakeWordDetected={wakeWordDetected}
           onToggle={toggleListening}
+          nluProcessing={nluProcessing}
+          lastMatchedLabel={lastMatchedLabel}
         />
       </div>
 

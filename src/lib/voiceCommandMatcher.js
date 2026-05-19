@@ -60,6 +60,8 @@ const COMMAND_MAP = [
 /**
  * Match a voice command string to an action.
  * Returns { type: 'event', label, category } | { type: 'rosc' } | { type: 'cpr' } | null
+ *
+ * Pass interventions/medications so NLU fallback (InvokeLLM) knows valid options.
  */
 export function matchVoiceCommand(transcript, aliases = {}, interventions = [], medications = []) {
   const t = transcript.toLowerCase();
@@ -83,5 +85,50 @@ export function matchVoiceCommand(transcript, aliases = {}, interventions = [], 
     }
   }
 
+  return null;
+}
+
+/**
+ * NLU fallback — calls InvokeLLM to interpret a natural-language command.
+ * Returns a match object identical to matchVoiceCommand, or null.
+ * Async — only call when keyword matching fails.
+ */
+export async function matchVoiceCommandNLU(transcript, interventions = [], medications = [], invokeLLM) {
+  if (!invokeLLM) return null;
+  const validLabels = [
+    'CPR', 'ROSC',
+    ...interventions.map(i => i.label),
+    ...medications.map(m => m.label),
+  ];
+  try {
+    const result = await invokeLLM({
+      prompt: `You are a voice command parser for an emergency medical app used by paramedics.
+The paramedic said: "${transcript}"
+
+Match this to one of these valid actions: ${validLabels.join(', ')}
+
+Rules:
+- "CPR" triggers CPR start
+- "ROSC" means return of spontaneous circulation
+- All others are either interventions or medications
+- If nothing matches, return null
+- Be liberal — "gave the epi" means Epinephrine, "shocked the patient" means Defibrillation, "pushed amio" means Amiodarone
+
+Interventions: ${interventions.map(i => i.label).join(', ')}
+Medications: ${medications.map(m => m.label).join(', ')}`,
+      response_json_schema: {
+        type: 'object',
+        properties: {
+          matched: { type: ['string', 'null'] },
+        },
+      },
+    });
+    const matched = result?.matched;
+    if (!matched) return null;
+    if (matched === 'CPR') return { type: 'cpr' };
+    if (matched === 'ROSC') return { type: 'rosc' };
+    if (interventions.find(i => i.label === matched)) return { type: 'event', label: matched, category: 'intervention' };
+    if (medications.find(m => m.label === matched)) return { type: 'event', label: matched, category: 'medication' };
+  } catch {}
   return null;
 }
