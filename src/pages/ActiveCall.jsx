@@ -14,6 +14,7 @@ import VoiceIndicator from '@/components/emit/VoiceIndicator';
 import BugReportModal from '@/components/emit/BugReportModal';
 import { getVoiceAliases } from '@/hooks/useVoiceAliases';
 import { INTERVENTIONS, MEDICATIONS } from '@/lib/eventData';
+import { matchVoiceCommand } from '@/lib/voiceCommandMatcher';
 
 const TABS = [
   { key: 'interventions', label: 'Interventions', icon: Syringe, color: 'text-blue-400' },
@@ -167,113 +168,14 @@ export default function ActiveCall() {
   // --- Voice handlers defined AFTER their dependencies ---
 
   const handleVoiceCommand = useCallback((cmd) => {
-    const t = cmd.toLowerCase();
-
-    // Check user-taught aliases first
     const aliases = getVoiceAliases();
-    const allItems = [...INTERVENTIONS, ...MEDICATIONS];
-    for (const item of allItems) {
-      const itemAliases = aliases[item.key] || [];
-      if (itemAliases.some(phrase => t.includes(phrase))) {
-        const cat = INTERVENTIONS.find(i => i.key === item.key) ? 'intervention' : 'medication';
-        addEvent(item.label, cat);
-        return;
-      }
-    }
-
-    // --- Interventions ---
-    if (t.includes('iv') || t.includes('intravenous') || t.includes('i.v')) {
-      addEvent('IV Access', 'intervention');
-    } else if (t.includes('io') || t.includes('i.o') || t.includes('intraosseous')) {
-      addEvent('IO Access', 'intervention');
-    } else if (t.includes('spinal') || t.includes('spine') || t.includes('c-spine') || t.includes('cervical')) {
-      addEvent('Spinal Restriction', 'intervention');
-    } else if (t.includes('bvm') || t.includes('bag valve') || t.includes('bag-valve') || t.includes('bagging')) {
-      addEvent('BVM', 'intervention');
-    } else if ((t.includes('king') && t.includes('airway')) || t.includes('king airway') || t.includes('king ltd') || t.includes('king tube')) {
-      addEvent('King Airway', 'intervention');
-    } else if (t.includes('intubat') || t.includes('intubation') || t.includes('ett') || t.includes('e.t.t') || t.includes('endotracheal')) {
-      addEvent('Intubation', 'intervention');
-    } else if (t.includes('airway') || t.includes('supraglottic')) {
-      addEvent('Airway Placement', 'intervention');
-    } else if (t.includes('cpap') || t.includes('c-pap') || t.includes('c pap')) {
-      addEvent('CPAP', 'intervention');
-    } else if (t.includes('defib') || t.includes('defibrillat') || t.includes('shock') || t.includes('cardiovert')) {
-      if (t.includes('cardiovert')) {
-        addEvent('Cardioversion', 'intervention');
-      } else {
-        addEvent('Defibrillation', 'intervention');
-      }
-    } else if (t.includes('12 lead') || t.includes('twelve lead') || t.includes('12-lead') || t.includes('ecg') || t.includes('ekg')) {
-      addEvent('12-Lead ECG', 'intervention');
-    } else if (t.includes('needle') || t.includes('decompress') || t.includes('needle d') || t.includes('needle decompression')) {
-      addEvent('Needle Decompression', 'intervention');
-    } else if (t.includes('tourniquet') || t.includes('tourni') || t.includes('tq')) {
-      addEvent('Tourniquet', 'intervention');
-    } else if (t.includes('wound pack') || t.includes('packing') || t.includes('wound plug')) {
-      addEvent('Wound Packing', 'intervention');
-    } else if (t.includes('splint') || t.includes('immobiliz')) {
-      addEvent('Splinting', 'intervention');
-    } else if (t.includes('oxygen') || t.includes('o2') || t.includes('o 2') || t.includes('o-2') || t.includes('02 applied') || t.includes('oxygen applied')) {
-      addEvent('O2 Applied', 'intervention');
-
-    // --- Medications ---
-    } else if ((t.includes('epi') || t.includes('epinephrine') || t.includes('adrenaline')) && (t.includes('drip') || t.includes('infusion'))) {
-      addEvent('Dirty Epi Drip', 'medication');
-    } else if (t.includes('epi') || t.includes('epinephrine') || t.includes('adrenaline')) {
-      addEvent('Epinephrine', 'medication');
-    } else if (t.includes('fluid') || t.includes('bolus') || t.includes('normal saline') || t.includes('lactated') || t.includes('ns bolus')) {
-      addEvent('Fluid Bolus', 'medication');
-    } else if (t.includes('ofirmev') || t.includes('offirmev') || t.includes('o firmev') || t.includes('acetaminophen iv') || t.includes('tylenol iv')) {
-      addEvent('Ofirmev', 'medication');
-    } else if (t.includes('fentanyl') || t.includes('fentanil') || t.includes('fent')) {
-      addEvent('Fentanyl', 'medication');
-    } else if (t.includes('ketamine') || t.includes('ketamin') || t.includes('ketamin')) {
-      addEvent('Ketamine', 'medication');
-    } else if (t.includes('ativan') || t.includes('lorazepam') || t.includes('loraze')) {
-      addEvent('Ativan', 'medication');
-    } else if (t.includes('versed') || t.includes('midazolam') || t.includes('midaz')) {
-      addEvent('Versed', 'medication');
-    } else if (t.includes('morphine') || t.includes('morph')) {
-      addEvent('Morphine', 'medication');
-    } else if (t.includes('adenosine') || t.includes('adenazine') || t.includes('adeno')) {
-      addEvent('Adenosine', 'medication');
-    } else if (t.includes('amiodarone') || t.includes('amiodaron') || t.includes('amio') || t.includes('cordarone')) {
-      addEvent('Amiodarone', 'medication');
-    } else if (t.includes('aspirin') || t.includes('asa') || t.includes('a.s.a')) {
-      addEvent('Aspirin', 'medication');
-    } else if (t.includes('narcan') || t.includes('naloxone') || t.includes('nalox')) {
-      addEvent('Narcan', 'medication');
-    } else if (t.includes('dextrose') || t.includes('d50') || t.includes('d 50') || t.includes('glucose') || t.includes('sugar')) {
-      addEvent('Dextrose', 'medication');
-    } else if (t.includes('nitro') || t.includes('nitroglycerin') || t.includes('nitroglycerine')) {
-      addEvent('Nitro', 'medication');
-    } else if (t.includes('albuterol') || t.includes('albuter') || t.includes('duoneb') || t.includes('nebulizer') || t.includes('neb treatment')) {
-      addEvent('Albuterol', 'medication');
-
-    // --- CPR / Cardiac ---
-    } else if (t.includes('cpr') || t.includes('compressions') || t.includes('start compressions') || t.includes('start cpr')) {
-      startCPR();
-    } else if (t.includes('rosc') || t.includes('return of spontaneous') || t.includes('pulse back') || t.includes('got a pulse')) {
-      handleROSC();
-
-    // --- Rhythms ---
-    } else if (t.includes('vfib') || t.includes('v fib') || t.includes('v-fib') || t.includes('ventricular fib') || t.includes('v. fib')) {
-      markRhythm('V-Fib');
-    } else if (t.includes('vtach') || t.includes('v tach') || t.includes('v-tach') || t.includes('ventricular tach') || t.includes('v. tach')) {
-      markRhythm('V-Tach');
-    } else if (t.includes('pea') || t.includes('p.e.a') || t.includes('pulseless electrical')) {
-      markRhythm('PEA');
-    } else if (t.includes('asystole') || t.includes('flatline') || t.includes('flat line') || t.includes('no rhythm')) {
-      markRhythm('Asystole');
-    } else if (t.includes('normal sinus') || t.includes('nsr') || t.includes('sinus rhythm') || t.includes('normal rhythm')) {
-      markRhythm('Normal Sinus');
-    } else if (t.includes('afib') || t.includes('a fib') || t.includes('a-fib') || t.includes('atrial fib')) {
-      markRhythm('A-Fib');
-    } else if (t.includes('svt') || t.includes('s.v.t') || t.includes('supraventricular')) {
-      markRhythm('SVT');
-    } else if (t.includes('brady') || t.includes('bradycardia') || t.includes('slow heart')) {
-      markRhythm('Bradycardia');
+    const match = matchVoiceCommand(cmd, aliases, INTERVENTIONS, MEDICATIONS);
+    if (!match) return;
+    if (match.type === 'cpr') { startCPR(); return; }
+    if (match.type === 'rosc') { handleROSC(); return; }
+    if (match.type === 'event') {
+      if (match.category === 'rhythm') { markRhythm(match.label); return; }
+      addEvent(match.label, match.category);
     }
   }, [addEvent, startCPR, handleROSC, markRhythm]);
 
