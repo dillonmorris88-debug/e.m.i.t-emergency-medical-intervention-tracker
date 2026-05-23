@@ -105,30 +105,61 @@ function phonetify(s) {
     .replace(/(.)\1+/g, '$1');   // collapse repeated consonants
 }
 
-/** Score how well a transcript matches a target phrase: 0–1. */
+const REGEX_SPECIALS = /[.*+?^${}()|[\]\\]/g;
+
+/**
+ * Whole-word regex test, used for SHORT targets where substring matching
+ * over-fires. Without this, a learned phrase like "iv" would match every
+ * word containing those two letters ("five", "give", "river"…).
+ */
+function matchesAsWord(haystack, needle) {
+  const esc = needle.replace(REGEX_SPECIALS, '\\$&');
+  return new RegExp(`\\b${esc}\\b`, 'i').test(haystack);
+}
+
+/**
+ * Score how well a transcript matches a target phrase: 0–1.
+ *
+ * Short targets (≤ 4 chars) are only matched as whole words and skip the
+ * phonetic / edit-distance fallbacks entirely — those over-match aggressively
+ * on short strings (e.g. phonetify("iv") collapses to "av" which then matches
+ * any word with a vowel + v).
+ */
 function phraseScore(transcript, target) {
   const t = transcript.toLowerCase().trim();
   const tgt = target.toLowerCase().trim();
   if (!t || !tgt) return 0;
 
   if (t === tgt) return 1.0;
+
+  // SHORT-TARGET PATH — require exact whole-word presence; no fuzzy fallback.
+  // This is the critical guard against "iv" / "io" / "ett" over-matching.
+  if (tgt.length <= 4) {
+    return matchesAsWord(t, tgt) ? 0.93 : 0;
+  }
+
+  // Substring is safe for longer targets (specific enough to not collide).
   if (t.includes(tgt) || tgt.includes(t)) return 0.92;
 
   const tPhon = phonetify(t), tgtPhon = phonetify(tgt);
   if (tPhon === tgtPhon || tPhon.includes(tgtPhon) || tgtPhon.includes(tPhon)) return 0.85;
 
-  // Word-overlap score — partial phrase matches (accent, speed, truncation)
-  const tWords = t.split(/\s+/);
-  const tgtWords = tgt.split(/\s+/);
-  const matchedWords = tWords.filter(w =>
-    tgtWords.some(tw => tw === w || editDistanceSimilarity(w, tw) > 0.75)
-  );
-  if (matchedWords.length > 0) {
-    const wordScore = matchedWords.length / Math.max(tWords.length, tgtWords.length);
-    if (wordScore >= 0.5) return 0.55 + wordScore * 0.28;
+  // Word-overlap score — partial phrase matches (accent, speed, truncation).
+  // Filter out very short words (≤ 2 chars) from overlap counting so "an iv"
+  // doesn't score against "iv access" purely on the strength of the "an".
+  const tWords   = t.split(/\s+/).filter(w => w.length > 2);
+  const tgtWords = tgt.split(/\s+/).filter(w => w.length > 2);
+  if (tWords.length > 0 && tgtWords.length > 0) {
+    const matchedWords = tWords.filter(w =>
+      tgtWords.some(tw => tw === w || editDistanceSimilarity(w, tw) > 0.75)
+    );
+    if (matchedWords.length > 0) {
+      const wordScore = matchedWords.length / Math.max(tWords.length, tgtWords.length);
+      if (wordScore >= 0.5) return 0.55 + wordScore * 0.28;
+    }
   }
 
-  // Phonetic edit-distance fallback
+  // Phonetic edit-distance fallback (longer targets only — guarded above).
   const edScore = editDistanceSimilarity(tPhon, tgtPhon);
   return edScore > 0.55 ? edScore * 0.65 : 0;
 }

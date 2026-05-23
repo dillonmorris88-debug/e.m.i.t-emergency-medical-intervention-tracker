@@ -16,7 +16,13 @@ import TrainingModeModal from '@/components/emit/TrainingModeModal';
 import BugReportModal from '@/components/emit/BugReportModal';
 import { getVoiceAliases } from '@/hooks/useVoiceAliases';
 import { INTERVENTIONS, MEDICATIONS, RHYTHMS } from '@/lib/eventData';
-import { matchVoiceCommand, matchVoiceCommandNLU, COMMAND_MAP } from '@/lib/voiceCommandMatcher';
+import {
+  matchVoiceCommand,
+  matchVoiceCommandNLU,
+  COMMAND_MAP,
+  STRICT_PROCEDURE_COMMANDS,
+  STRICT_PROCEDURE_MIN_CONFIDENCE,
+} from '@/lib/voiceCommandMatcher';
 import {
   VoiceLearningAgent,
   CONFIRMATION_REQUIRED_COMMANDS,
@@ -256,7 +262,6 @@ export default function ActiveCall() {
 
     // Agent beats keyword only when it found a learned phrase with higher confidence.
     if (agentPrediction.command && agentPrediction.confidence > bestConfidence) {
-      // Convert agent label back to a match object.
       const agentMatch = labelToMatch(agentPrediction.command);
       if (agentMatch) {
         bestMatch      = agentMatch;
@@ -272,30 +277,62 @@ export default function ActiveCall() {
         (params) => base44.integrations.Core.InvokeLLM(params)
       );
       setNluProcessing(false);
-      if (!nluMatch) return;
+
+      // Nothing matched at any tier — tell the user clearly instead of failing
+      // silently or guessing. Required by the IV/IO/Intubation over-match fix.
+      if (!nluMatch) {
+        speak('Command not recognized');
+        setLastMatchedLabel('');
+        setLastConfidence(null);
+        return;
+      }
+
+      // NLU is the lowest-trust tier (0.65). It MUST NOT be allowed to trigger
+      // strict procedure commands — that was the path producing phantom
+      // IV / IO / Intubation logs from unclear or hallucinated speech.
+      if (STRICT_PROCEDURE_COMMANDS.has(matchToLabel(nluMatch))) {
+        speak('Command not recognized');
+        setLastMatchedLabel('');
+        setLastConfidence(null);
+        return;
+      }
+
       bestMatch      = nluMatch;
       bestConfidence = nluMatch.confidence ?? 0.65;
     }
 
     setLastConfidence(bestConfidence);
 
-    // ── 5. Safety gate: confirm before executing dangerous or uncertain commands ─
+    // ── 5. Strict procedure guard ─────────────────────────────────────────────
+    // IV Access, IO Access, and Intubation will only fire on a clear, high
+    // confidence match. Below that bar we refuse the command outright — no
+    // confirmation prompt, no auto-execute. This kills the "any phrase with
+    // the letters iv/io/intubat triggers a procedure" class of bug.
+    const bestLabel = matchToLabel(bestMatch);
+    if (STRICT_PROCEDURE_COMMANDS.has(bestLabel) && bestConfidence < STRICT_PROCEDURE_MIN_CONFIDENCE) {
+      speak('Command not recognized');
+      setLastMatchedLabel('');
+      setLastConfidence(null);
+      return;
+    }
+
+    // ── 6. Safety gate: confirm dangerous or uncertain commands ───────────────
     if (shouldConfirm(bestMatch, bestConfidence)) {
       setPendingMatch({
         match:      bestMatch,
-        label:      matchToLabel(bestMatch),
+        label:      bestLabel,
         confidence: bestConfidence,
         transcript: cmd,
       });
       return;
     }
 
-    // ── 6. Auto-execute ───────────────────────────────────────────────────────
+    // ── 7. Auto-execute ───────────────────────────────────────────────────────
     applyMatch(bestMatch);
     tagLastEventAsVoice(cmd, bestConfidence);
 
-    // ── 7. Learn from successful execution (passive improvement from usage) ───
-    VoiceLearningAgent.learn(matchToLabel(bestMatch), null, cmd, null, bestConfidence);
+    // ── 8. Learn from successful execution (passive improvement from usage) ──
+    VoiceLearningAgent.learn(bestLabel, null, cmd, null, bestConfidence);
   }, [applyMatch, tagLastEventAsVoice]);
 
   // ── Confirmation handlers ────────────────────────────────────────────────────
