@@ -20,3 +20,8 @@ export function removeVoiceAlias(key, phrase) {
   aliases[key] = aliases[key].filter(p => p !== phrase);
   localStorage.setItem(STORAGE_KEY, JSON.stringify(aliases));
 }
+
+/** Delete all custom voice aliases (used by the "Delete learned voice data" setting). */
+export function clearAllVoiceAliases() {
+  localStorage.removeItem(STORAGE_KEY);
+}

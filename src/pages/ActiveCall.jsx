@@ -11,67 +11,108 @@ import InterventionPanel from '@/components/emit/InterventionPanel';
 import MedicationPanel from '@/components/emit/MedicationPanel';
 import EventLog from '@/components/emit/EventLog';
 import VoiceIndicator from '@/components/emit/VoiceIndicator';
+import VoiceConfirmModal from '@/components/emit/VoiceConfirmModal';
+import TrainingModeModal from '@/components/emit/TrainingModeModal';
 import BugReportModal from '@/components/emit/BugReportModal';
 import { getVoiceAliases } from '@/hooks/useVoiceAliases';
-import { INTERVENTIONS, MEDICATIONS } from '@/lib/eventData';
-import { matchVoiceCommand, matchVoiceCommandNLU } from '@/lib/voiceCommandMatcher';
+import { INTERVENTIONS, MEDICATIONS, RHYTHMS } from '@/lib/eventData';
+import { matchVoiceCommand, matchVoiceCommandNLU, COMMAND_MAP } from '@/lib/voiceCommandMatcher';
+import {
+  VoiceLearningAgent,
+  CONFIRMATION_REQUIRED_COMMANDS,
+  HIGH_CONFIDENCE_REQUIRED_COMMANDS,
+  CONFIRMATION_CONFIDENCE_THRESHOLD,
+} from '@/lib/voiceLearningAgent';
 import { base44 } from '@/api/base44Client';
 import { speak } from '@/lib/speak';
 
 const TABS = [
-  { key: 'interventions', label: 'Interventions', icon: Syringe, color: 'text-blue-400' },
-  { key: 'medications', label: 'Medications', icon: Activity, color: 'text-amber-400' },
-  { key: 'log', label: 'Event Log', icon: FileText, color: 'text-slate-400' },
+  { key: 'interventions', label: 'Interventions', icon: Syringe,   color: 'text-blue-400' },
+  { key: 'medications',   label: 'Medications',   icon: Activity,  color: 'text-amber-400' },
+  { key: 'log',           label: 'Event Log',     icon: FileText,  color: 'text-slate-400' },
 ];
+
+// All built-in command definitions passed to VoiceLearningAgent.predictCommand().
+// Derived once from COMMAND_MAP so there's a single source of truth.
+const KNOWN_COMMANDS_FOR_AGENT = COMMAND_MAP.map(entry => ({
+  label:    entry.label || (entry.action === 'rosc' ? 'ROSC' : entry.action === 'cpr' ? 'CPR' : 'Efforts Discontinued'),
+  keywords: entry.keywords,
+}));
+
+/** Convert a match object to its display label for the confirmation modal. */
+function matchToLabel(match) {
+  if (!match) return '';
+  if (match.type === 'cpr')         return 'CPR Started';
+  if (match.type === 'rosc')        return 'ROSC';
+  if (match.type === 'discontinue') return 'Efforts Discontinued';
+  return match.label || '';
+}
+
+/**
+ * Determine whether a match at the given confidence level needs a user tap
+ * before executing.
+ *
+ * Safety rules:
+ *   - CONFIRMATION_REQUIRED_COMMANDS always prompt (Defib, Cardioversion,
+ *     Efforts Discontinued) — these are irreversible or high clinical risk.
+ *   - HIGH_CONFIDENCE_REQUIRED_COMMANDS (all medications, rhythms, ROSC)
+ *     prompt when confidence < CONFIRMATION_CONFIDENCE_THRESHOLD (0.72).
+ *   - Any other match below threshold also prompts.
+ */
+function shouldConfirm(match, confidence) {
+  const label = matchToLabel(match);
+  if (CONFIRMATION_REQUIRED_COMMANDS.has(label)) return true;
+  if (HIGH_CONFIDENCE_REQUIRED_COMMANDS.has(label) && confidence < CONFIRMATION_CONFIDENCE_THRESHOLD) return true;
+  if (confidence < CONFIRMATION_CONFIDENCE_THRESHOLD) return true;
+  return false;
+}
 
 export default function ActiveCall() {
   const { callId } = useParams();
   const navigate = useNavigate();
-  const [call, setCall] = useState(null);
-  const [activeTab, setActiveTab] = useState('interventions');
-  const [listening, setListening] = useState(false);
-  const [lastCommand, setLastCommand] = useState('');
-  const [liveTranscript, setLiveTranscript] = useState('');
+  const [call, setCall]                       = useState(null);
+  const [activeTab, setActiveTab]             = useState('interventions');
+  const [listening, setListening]             = useState(false);
+  const [lastCommand, setLastCommand]         = useState('');
+  const [liveTranscript, setLiveTranscript]   = useState('');
   const [wakeWordDetected, setWakeWordDetected] = useState(false);
-  const recognitionRef = useRef(null);
-  const wakeTimerRef = useRef(null);
-  const voiceCommandRef = useRef(null);
-  const [showBugReport, setShowBugReport] = useState(false);
-  const [syncStatus, setSyncStatus] = useState(navigator.onLine ? 'syncing' : 'offline');
-  const [nluProcessing, setNluProcessing] = useState(false);
+  const [nluProcessing, setNluProcessing]     = useState(false);
   const [lastMatchedLabel, setLastMatchedLabel] = useState('');
+  const [lastConfidence, setLastConfidence]   = useState(null);
+  const [showBugReport, setShowBugReport]     = useState(false);
+  const [showTraining, setShowTraining]       = useState(false);
+  const [syncStatus, setSyncStatus]           = useState(navigator.onLine ? 'syncing' : 'offline');
+
+  // Pending match waiting for user confirmation
+  const [pendingMatch, setPendingMatch] = useState(null);
+  // { match, label, confidence, transcript }
+
+  const recognitionRef    = useRef(null);
+  const wakeTimerRef      = useRef(null);
+  const voiceCommandRef   = useRef(null);
 
   useEffect(() => {
     let c = callId ? getCall(callId) : null;
-    if (!c) {
-      c = createNewCall();
-      saveCall(c);
-    }
+    if (!c) { c = createNewCall(); saveCall(c); }
     setCall(c);
   }, [callId]);
 
-  // Auto-navigate to call URL if new
   useEffect(() => {
-    if (call && !callId) {
-      navigate(`/call/${call.id}`, { replace: true });
-    }
+    if (call && !callId) navigate(`/call/${call.id}`, { replace: true });
   }, [call, callId, navigate]);
 
-  // --- All action handlers defined FIRST ---
+  // ── Action handlers ─────────────────────────────────────────────────────────
 
   const addEvent = useCallback((label, category, details = '') => {
     setCall(prev => {
       if (!prev) return prev;
-      const cprEvent = prev.events?.find(e => e.category === 'cpr' && e.label === 'CPR Started');
-      const cprStart = cprEvent ? new Date(cprEvent.timestamp).getTime() : null;
+      const cprEvent   = prev.events?.find(e => e.category === 'cpr' && e.label === 'CPR Started');
+      const cprStart   = cprEvent ? new Date(cprEvent.timestamp).getTime() : null;
       const elapsed_seconds = cprStart ? Math.floor((Date.now() - cprStart) / 1000) : null;
       const newEvent = {
         id: crypto.randomUUID(),
         timestamp: new Date().toISOString(),
-        category,
-        label,
-        details,
-        elapsed_seconds,
+        category, label, details, elapsed_seconds,
       };
       const updated = { ...prev, events: [...(prev.events || []), newEvent] };
       saveCall(updated);
@@ -83,17 +124,13 @@ export default function ActiveCall() {
   const startCPR = useCallback(() => {
     setCall(prev => {
       if (!prev || prev.cpr_active) return prev;
-      const updated = { ...prev, cpr_active: true };
       const withEvent = {
-        ...updated,
-        events: [...(updated.events || []), {
+        ...prev, cpr_active: true,
+        events: [...(prev.events || []), {
           id: crypto.randomUUID(),
           timestamp: new Date().toISOString(),
-          category: 'cpr',
-          label: 'CPR Started',
-          details: '',
-          elapsed_seconds: 0,
-        }]
+          category: 'cpr', label: 'CPR Started', details: '', elapsed_seconds: 0,
+        }],
       };
       saveCall(withEvent);
       return withEvent;
@@ -104,17 +141,13 @@ export default function ActiveCall() {
   const handleROSC = useCallback(() => {
     setCall(prev => {
       if (!prev) return prev;
-      const updated = { ...prev, cpr_active: false, rosc: true };
       const withEvent = {
-        ...updated,
-        events: [...(updated.events || []), {
+        ...prev, cpr_active: false, rosc: true,
+        events: [...(prev.events || []), {
           id: crypto.randomUUID(),
           timestamp: new Date().toISOString(),
-          category: 'rosc',
-          label: 'ROSC',
-          details: 'Return of Spontaneous Circulation',
-          elapsed_seconds: null,
-        }]
+          category: 'rosc', label: 'ROSC', details: 'Return of Spontaneous Circulation', elapsed_seconds: null,
+        }],
       };
       saveCall(withEvent);
       return withEvent;
@@ -125,17 +158,13 @@ export default function ActiveCall() {
   const handleDiscontinue = useCallback(() => {
     setCall(prev => {
       if (!prev) return prev;
-      const updated = { ...prev, cpr_active: false, discontinued: true };
       const withEvent = {
-        ...updated,
-        events: [...(updated.events || []), {
+        ...prev, cpr_active: false, discontinued: true,
+        events: [...(prev.events || []), {
           id: crypto.randomUUID(),
           timestamp: new Date().toISOString(),
-          category: 'cpr',
-          label: 'Efforts Discontinued',
-          details: '',
-          elapsed_seconds: null,
-        }]
+          category: 'cpr', label: 'Efforts Discontinued', details: '', elapsed_seconds: null,
+        }],
       };
       saveCall(withEvent);
       return withEvent;
@@ -146,17 +175,13 @@ export default function ActiveCall() {
   const markRhythm = useCallback((rhythm) => {
     setCall(prev => {
       if (!prev) return prev;
-      const updated = { ...prev, current_rhythm: rhythm };
       const withEvent = {
-        ...updated,
-        events: [...(updated.events || []), {
+        ...prev, current_rhythm: rhythm,
+        events: [...(prev.events || []), {
           id: crypto.randomUUID(),
           timestamp: new Date().toISOString(),
-          category: 'rhythm',
-          label: `Rhythm: ${rhythm}`,
-          details: '',
-          elapsed_seconds: null,
-        }]
+          category: 'rhythm', label: `Rhythm: ${rhythm}`, details: '', elapsed_seconds: null,
+        }],
       };
       saveCall(withEvent);
       return withEvent;
@@ -174,47 +199,119 @@ export default function ActiveCall() {
     navigate('/');
   }, [navigate]);
 
-  // --- Voice handlers defined AFTER their dependencies ---
+  // ── Match execution ──────────────────────────────────────────────────────────
 
   const applyMatch = useCallback((match) => {
     if (!match) return;
-    if (match.type === 'cpr') { startCPR(); setLastMatchedLabel('CPR Started'); return; }
-    if (match.type === 'rosc') { handleROSC(); setLastMatchedLabel('ROSC'); return; }
+    if (match.type === 'cpr')         { startCPR();           setLastMatchedLabel('CPR Started'); return; }
+    if (match.type === 'rosc')        { handleROSC();         setLastMatchedLabel('ROSC'); return; }
+    if (match.type === 'discontinue') { handleDiscontinue();  setLastMatchedLabel('Efforts Discontinued'); return; }
     if (match.type === 'event') {
       setLastMatchedLabel(match.label);
       if (match.category === 'rhythm') { markRhythm(match.label); return; }
       addEvent(match.label, match.category);
     }
-  }, [addEvent, startCPR, handleROSC, markRhythm]);
+  }, [addEvent, startCPR, handleROSC, handleDiscontinue, markRhythm]);
 
-  const handleVoiceCommand = useCallback(async (cmd) => {
-    const aliases = getVoiceAliases();
-    const match = matchVoiceCommand(cmd, aliases, INTERVENTIONS, MEDICATIONS);
-    if (match) { applyMatch(match); return; }
-    // NLU fallback — only when keyword matching fails
-    setNluProcessing(true);
-    const nluMatch = await matchVoiceCommandNLU(
-      cmd, INTERVENTIONS, MEDICATIONS,
-      (params) => base44.integrations.Core.InvokeLLM(params)
-    );
-    setNluProcessing(false);
-    applyMatch(nluMatch);
+  // ── Voice command pipeline ───────────────────────────────────────────────────
+
+  const handleVoiceCommand = useCallback(async (cmd, rawConfidence = 0.5) => {
+    // ── 1. Keyword match (fast, offline, no network needed) ──────────────────
+    const aliases      = getVoiceAliases();
+    const keywordMatch = matchVoiceCommand(cmd, aliases, INTERVENTIONS, MEDICATIONS);
+
+    // ── 2. Learning agent prediction (local, improves with training) ──────────
+    const agentPrediction = VoiceLearningAgent.predictCommand(cmd, KNOWN_COMMANDS_FOR_AGENT);
+
+    // ── 3. Pick the best match ────────────────────────────────────────────────
+    let bestMatch      = null;
+    let bestConfidence = 0;
+
+    if (keywordMatch) {
+      bestMatch      = keywordMatch;
+      bestConfidence = keywordMatch.confidence ?? 0.90;
+    }
+
+    // Agent beats keyword only when it found a learned phrase with higher confidence.
+    if (agentPrediction.command && agentPrediction.confidence > bestConfidence) {
+      // Convert agent label back to a match object.
+      const agentMatch = labelToMatch(agentPrediction.command);
+      if (agentMatch) {
+        bestMatch      = agentMatch;
+        bestConfidence = agentPrediction.confidence;
+      }
+    }
+
+    // ── 4. NLU fallback (cloud, only when both keyword + agent fail) ──────────
+    if (!bestMatch) {
+      setNluProcessing(true);
+      const nluMatch = await matchVoiceCommandNLU(
+        cmd, INTERVENTIONS, MEDICATIONS,
+        (params) => base44.integrations.Core.InvokeLLM(params)
+      );
+      setNluProcessing(false);
+      if (!nluMatch) return;
+      bestMatch      = nluMatch;
+      bestConfidence = nluMatch.confidence ?? 0.65;
+    }
+
+    setLastConfidence(bestConfidence);
+
+    // ── 5. Safety gate: confirm before executing dangerous or uncertain commands ─
+    if (shouldConfirm(bestMatch, bestConfidence)) {
+      setPendingMatch({
+        match:      bestMatch,
+        label:      matchToLabel(bestMatch),
+        confidence: bestConfidence,
+        transcript: cmd,
+      });
+      return;
+    }
+
+    // ── 6. Auto-execute ───────────────────────────────────────────────────────
+    applyMatch(bestMatch);
+
+    // ── 7. Learn from successful execution (passive improvement from usage) ───
+    VoiceLearningAgent.learn(matchToLabel(bestMatch), null, cmd, null, bestConfidence);
   }, [applyMatch]);
+
+  // ── Confirmation handlers ────────────────────────────────────────────────────
+
+  const handleConfirmMatch = useCallback(() => {
+    if (!pendingMatch) return;
+    applyMatch(pendingMatch.match);
+    // Teach the agent: user confirmed this transcript → this command.
+    VoiceLearningAgent.learn(
+      pendingMatch.label,
+      null,
+      pendingMatch.transcript,
+      null,
+      // Boost confidence slightly to reward confirmed matches.
+      Math.min((pendingMatch.confidence ?? 0) + 0.1, 1.0)
+    );
+    setPendingMatch(null);
+  }, [pendingMatch, applyMatch]);
+
+  const handleRejectMatch = useCallback(() => {
+    setPendingMatch(null);
+  }, []);
+
+  // ── Recognition lifecycle ────────────────────────────────────────────────────
 
   const startListening = useCallback(() => {
     recognitionRef.current = startVoiceRecognition(
       () => {
         setLastCommand('');
         setLastMatchedLabel('');
+        setLastConfidence(null);
         setWakeWordDetected(true);
         clearTimeout(wakeTimerRef.current);
         wakeTimerRef.current = setTimeout(() => setWakeWordDetected(false), 1500);
       },
-      (cmd) => {
+      (cmd, confidence) => {
         setLastCommand(cmd);
         setLiveTranscript('');
-        // Always call through the ref so we never have a stale closure
-        voiceCommandRef.current?.(cmd);
+        voiceCommandRef.current?.(cmd, confidence);
       },
       (interim) => setLiveTranscript(interim)
     );
@@ -229,28 +326,24 @@ export default function ActiveCall() {
     setWakeWordDetected(false);
   }, []);
 
-  // Keep the ref always pointing to the latest handler — no restart needed
-  useEffect(() => {
-    voiceCommandRef.current = handleVoiceCommand;
-  }, [handleVoiceCommand]);
+  // Keep ref current so the recognition callback always calls the latest handler.
+  useEffect(() => { voiceCommandRef.current = handleVoiceCommand; }, [handleVoiceCommand]);
 
-  // Sync status watcher
   useEffect(() => {
     const unsub = autoSync((status) => setSyncStatus(status));
     return unsub;
   }, []);
 
   const toggleListening = useCallback(() => {
-    if (listening) stopListening();
-    else startListening();
+    if (listening) stopListening(); else startListening();
   }, [listening, startListening, stopListening]);
 
-  // Voice recognition — auto-start once per call
+  // Auto-start recognition once per call.
   useEffect(() => {
     if (!call) return;
     startListening();
     return () => stopListening();
-  }, [call?.id]);
+  }, [call?.id]); // eslint-disable-line react-hooks/exhaustive-deps
 
   if (!call) {
     return (
@@ -264,7 +357,10 @@ export default function ActiveCall() {
     <div className="min-h-screen bg-background flex flex-col max-w-lg mx-auto">
       {/* Header */}
       <div className="flex items-center justify-between px-4 pt-4 pb-3 border-b border-border">
-        <button onClick={() => navigate('/')} className="flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors btn-tap">
+        <button
+          onClick={() => navigate('/')}
+          className="flex items-center gap-1 text-muted-foreground hover:text-foreground transition-colors btn-tap"
+        >
           <ChevronLeft className="w-5 h-5" />
           <span className="text-sm">Calls</span>
         </button>
@@ -291,6 +387,11 @@ export default function ActiveCall() {
           onToggle={toggleListening}
           nluProcessing={nluProcessing}
           lastMatchedLabel={lastMatchedLabel}
+          lastConfidence={lastConfidence}
+          onOpenTraining={() => {
+            stopListening();
+            setShowTraining(true);
+          }}
         />
       </div>
 
@@ -345,10 +446,20 @@ export default function ActiveCall() {
       {/* Tab Content */}
       <div className="flex-1 overflow-y-auto px-4 py-3 pb-6">
         {activeTab === 'interventions' && (
-          <InterventionPanel onEvent={addEvent} onBugReport={() => setShowBugReport(true)} onVoicePause={stopListening} onVoiceResume={startListening} />
+          <InterventionPanel
+            onEvent={addEvent}
+            onBugReport={() => setShowBugReport(true)}
+            onVoicePause={stopListening}
+            onVoiceResume={startListening}
+          />
         )}
         {activeTab === 'medications' && (
-          <MedicationPanel onEvent={addEvent} onBugReport={() => setShowBugReport(true)} onVoicePause={stopListening} onVoiceResume={startListening} />
+          <MedicationPanel
+            onEvent={addEvent}
+            onBugReport={() => setShowBugReport(true)}
+            onVoicePause={stopListening}
+            onVoiceResume={startListening}
+          />
         )}
         {activeTab === 'log' && (
           <EventLog events={call.events} />
@@ -368,9 +479,49 @@ export default function ActiveCall() {
         </button>
       </div>
 
+      {/* Voice confirmation modal — shown for low-confidence or always-confirm commands */}
+      <VoiceConfirmModal
+        pending={pendingMatch}
+        onConfirm={handleConfirmMatch}
+        onReject={handleRejectMatch}
+      />
+
+      {/* Training Mode modal */}
+      {showTraining && (
+        <TrainingModeModal
+          onClose={() => {
+            setShowTraining(false);
+            startListening(); // resume recognition after training session
+          }}
+        />
+      )}
+
       {showBugReport && (
         <BugReportModal call={call} onClose={() => setShowBugReport(false)} />
       )}
     </div>
   );
+}
+
+// ── Helpers (module-level, not hooks) ─────────────────────────────────────────
+
+/**
+ * Convert a VoiceLearningAgent label back to the match format expected by applyMatch().
+ * Returns null if the label is not recognized.
+ */
+function labelToMatch(label) {
+  if (!label) return null;
+  if (label === 'CPR')                  return { type: 'cpr' };
+  if (label === 'ROSC')                 return { type: 'rosc' };
+  if (label === 'Efforts Discontinued') return { type: 'discontinue' };
+
+  if (RHYTHMS.find(r => r.label === label))
+    return { type: 'event', label, category: 'rhythm' };
+  if (INTERVENTIONS.find(i => i.label === label))
+    return { type: 'event', label, category: 'intervention' };
+  if (MEDICATIONS.find(m => m.label === label))
+    return { type: 'event', label, category: 'medication' };
+
+  // Custom / notes events
+  return { type: 'event', label, category: 'notes' };
 }
