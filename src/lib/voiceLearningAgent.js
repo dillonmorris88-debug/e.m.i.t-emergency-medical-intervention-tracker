@@ -184,6 +184,51 @@ class VoiceLearningAgentClass {
   }
 
   /**
+   * Record that a recognition was WRONG — the user marked an event as
+   * incorrectly interpreted in the Event Log.
+   *
+   * Effects:
+   *   - Decrements (or removes) any learned phrase under `label` that matches
+   *     the transcript, so we stop reinforcing the bad mapping.
+   *   - Logs the transcript as a misrecognition under `label` for diagnostics.
+   *   - Decrements successCount so this command is less heavily weighted.
+   *
+   * Pass an empty/null transcript when the event was added via button (we still
+   * remove the entry from the log, but there's nothing for the agent to learn).
+   *
+   * @param {string} label       - The (wrong) command label that was triggered
+   * @param {string|null} transcript - The original spoken phrase, if any
+   */
+  recordIncorrectMatch(label, transcript) {
+    if (!label) return;
+    const data = loadData();
+    const key = label.toLowerCase().replace(/[^a-z0-9]/g, '_');
+    const entry = data.commands[key];
+    if (!entry) return;
+
+    if (transcript) {
+      const phraseText = transcript.toLowerCase().trim();
+
+      // Find any learned phrase that matches this transcript and weaken it
+      const idx = entry.phrases.findIndex(p => p.text === phraseText);
+      if (idx >= 0) {
+        const phrase = entry.phrases[idx];
+        phrase.count = Math.max(0, (phrase.count || 1) - 2); // strong penalty
+        if (phrase.count === 0) {
+          entry.phrases.splice(idx, 1); // forget the bad mapping entirely
+        }
+      }
+
+      // Track as a misrecognition for diagnostics / Training Mode display
+      const mis = entry.misrecognitions.find(m => m.wrong === phraseText);
+      if (mis) { mis.count++; } else { entry.misrecognitions.push({ wrong: phraseText, count: 1 }); }
+    }
+
+    entry.successCount = Math.max(0, (entry.successCount || 0) - 1);
+    saveData(data);
+  }
+
+  /**
    * Predict which EMiT command the user most likely said.
    *
    * @param {string} transcript

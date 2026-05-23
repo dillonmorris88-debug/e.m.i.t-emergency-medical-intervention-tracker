@@ -213,6 +213,28 @@ export default function ActiveCall() {
     }
   }, [addEvent, startCPR, handleROSC, handleDiscontinue, markRhythm]);
 
+  // ── Tag voice events ─────────────────────────────────────────────────────────
+  // Voice-triggered commands flow through the existing add/start/mark handlers,
+  // which leaves no record of *how* the event was created. After a voice-driven
+  // action fires, we update the last event in the call to mark it as voice-sourced
+  // and store the original transcript — used by EventLog's mark-incorrect button.
+  const tagLastEventAsVoice = useCallback((transcript, confidence) => {
+    setCall(prev => {
+      if (!prev?.events?.length) return prev;
+      const events = [...prev.events];
+      const i = events.length - 1;
+      events[i] = {
+        ...events[i],
+        source: 'voice',
+        voiceTranscript: transcript,
+        voiceConfidence: confidence,
+      };
+      const updated = { ...prev, events };
+      saveCall(updated);
+      return updated;
+    });
+  }, []);
+
   // ── Voice command pipeline ───────────────────────────────────────────────────
 
   const handleVoiceCommand = useCallback(async (cmd, rawConfidence = 0.5) => {
@@ -270,16 +292,18 @@ export default function ActiveCall() {
 
     // ── 6. Auto-execute ───────────────────────────────────────────────────────
     applyMatch(bestMatch);
+    tagLastEventAsVoice(cmd, bestConfidence);
 
     // ── 7. Learn from successful execution (passive improvement from usage) ───
     VoiceLearningAgent.learn(matchToLabel(bestMatch), null, cmd, null, bestConfidence);
-  }, [applyMatch]);
+  }, [applyMatch, tagLastEventAsVoice]);
 
   // ── Confirmation handlers ────────────────────────────────────────────────────
 
   const handleConfirmMatch = useCallback(() => {
     if (!pendingMatch) return;
     applyMatch(pendingMatch.match);
+    tagLastEventAsVoice(pendingMatch.transcript, pendingMatch.confidence);
     // Teach the agent: user confirmed this transcript → this command.
     VoiceLearningAgent.learn(
       pendingMatch.label,
@@ -290,10 +314,58 @@ export default function ActiveCall() {
       Math.min((pendingMatch.confidence ?? 0) + 0.1, 1.0)
     );
     setPendingMatch(null);
-  }, [pendingMatch, applyMatch]);
+  }, [pendingMatch, applyMatch, tagLastEventAsVoice]);
 
   const handleRejectMatch = useCallback(() => {
     setPendingMatch(null);
+  }, []);
+
+  // ── Mark event as incorrectly interpreted ────────────────────────────────────
+  // Removes the event from the call and — if it was voice-triggered — tells
+  // the VoiceLearningAgent to weaken or forget the bad transcript→label mapping.
+  const handleMarkEventIncorrect = useCallback((event) => {
+    if (!event) return;
+
+    // Teach the agent (only if we have voice metadata; button presses just delete)
+    if (event.source === 'voice' && event.voiceTranscript) {
+      // The label stored in events for rhythms is "Rhythm: V-Fib"; the agent
+      // tracks the bare label ("V-Fib"). Strip the "Rhythm:" prefix.
+      const labelForAgent = event.category === 'rhythm'
+        ? (event.label || '').replace(/^Rhythm:\s*/i, '')
+        : event.label;
+      VoiceLearningAgent.recordIncorrectMatch(labelForAgent, event.voiceTranscript);
+    }
+
+    // Remove the event from the call
+    setCall(prev => {
+      if (!prev) return prev;
+      const events = (prev.events || []).filter(e => e.id !== event.id);
+      const updated = { ...prev, events };
+
+      // Roll back transient state if we're removing the last marker of it
+      if (event.label === 'CPR Started') {
+        // No remaining CPR Started event → CPR is no longer "in progress"
+        if (!events.some(e => e.category === 'cpr' && e.label === 'CPR Started')) {
+          updated.cpr_active = false;
+        }
+      }
+      if (event.category === 'rosc') {
+        if (!events.some(e => e.category === 'rosc')) updated.rosc = false;
+      }
+      if (event.label === 'Efforts Discontinued') {
+        if (!events.some(e => e.label === 'Efforts Discontinued')) updated.discontinued = false;
+      }
+      if (event.category === 'rhythm') {
+        // Recompute current rhythm from the most recent remaining rhythm event
+        const lastRhythm = [...events].reverse().find(e => e.category === 'rhythm');
+        updated.current_rhythm = lastRhythm
+          ? lastRhythm.label.replace(/^Rhythm:\s*/i, '')
+          : null;
+      }
+
+      saveCall(updated);
+      return updated;
+    });
   }, []);
 
   // ── Recognition lifecycle ────────────────────────────────────────────────────
@@ -462,7 +534,7 @@ export default function ActiveCall() {
           />
         )}
         {activeTab === 'log' && (
-          <EventLog events={call.events} />
+          <EventLog events={call.events} onMarkIncorrect={handleMarkEventIncorrect} />
         )}
       </div>
 

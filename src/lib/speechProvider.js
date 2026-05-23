@@ -68,6 +68,22 @@ const MIN_CHUNK_BYTES = 3000;
 // Whisper is highly accurate; treat its results as 0.92 confidence.
 const WHISPER_CONFIDENCE = 0.92;
 
+/**
+ * Medical-context prompt sent with every Whisper request.
+ *
+ * Whisper's `prompt` parameter biases the model toward the listed vocabulary —
+ * critical for medication names and acronyms it would otherwise mishear
+ * ("amio" → "ammo", "Ofirmev" → "off her math", "PEA" → "pee a", etc).
+ * Keep under ~224 tokens (Whisper's limit). Order matters less than coverage.
+ */
+const MEDICAL_PROMPT = [
+  'Paramedic logging emergency interventions. Wake word: EMIT or Hey EMIT.',
+  'Medications: epinephrine, dirty epi drip, fluid bolus, Ofirmev, fentanyl, ketamine, Ativan, lorazepam, Versed, midazolam, morphine, adenosine, amiodarone, aspirin, Narcan, naloxone, dextrose, D50, nitroglycerin, albuterol, DuoNeb.',
+  'Interventions: IV access, IO access, intraosseous, spinal restriction, c-spine, BVM, intubation, King airway, CPAP, defibrillation, cardioversion, 12-lead ECG, EKG, needle decompression, tourniquet, wound packing, splinting, oxygen.',
+  'Rhythms: V-fib, V-tach, PEA, asystole, normal sinus, A-fib, SVT, bradycardia, supraventricular tachycardia.',
+  'Actions: start CPR, ROSC, return of spontaneous circulation, efforts discontinued, patient contact, on scene.',
+].join(' ');
+
 export class WhisperProvider {
   constructor(apiKey) {
     this._apiKey     = apiKey;
@@ -226,6 +242,11 @@ export class WhisperProvider {
     form.append('file', blob, `audio.${ext}`);
     form.append('model', 'whisper-1');
     form.append('language', 'en');
+    // Bias Whisper toward medical vocabulary — dramatically improves
+    // recognition of drug names, acronyms (PEA, SVT, BVM), and EMS jargon.
+    form.append('prompt', MEDICAL_PROMPT);
+    // Lower temperature = more deterministic; we want stable, repeatable matches.
+    form.append('temperature', '0');
 
     let text;
     try {
