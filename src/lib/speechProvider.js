@@ -79,7 +79,7 @@ const WHISPER_CONFIDENCE = 0.92;
 const MEDICAL_PROMPT = [
   'Paramedic logging emergency interventions. Wake word: EMIT or Hey EMIT.',
   'Medications: epinephrine, dirty epi drip, fluid bolus, Ofirmev, fentanyl, ketamine, Ativan, lorazepam, Versed, midazolam, morphine, adenosine, amiodarone, aspirin, Narcan, naloxone, dextrose, D50, nitroglycerin, albuterol, DuoNeb.',
-  'Interventions: IV access, IO access, intraosseous, spinal restriction, c-spine, BVM, intubation, King airway, CPAP, defibrillation, cardioversion, 12-lead ECG, EKG, needle decompression, tourniquet, wound packing, splinting, oxygen.',
+  'Interventions: spinal restriction, c-spine, BVM, intubation, King airway, CPAP, defibrillation, cardioversion, 12-lead ECG, EKG, needle decompression, tourniquet, wound packing, splinting, oxygen.',
   'Rhythms: V-fib, V-tach, PEA, asystole, normal sinus, A-fib, SVT, bradycardia, supraventricular tachycardia.',
   'Actions: start CPR, ROSC, return of spontaneous circulation, efforts discontinued, patient contact, on scene.',
 ].join(' ');

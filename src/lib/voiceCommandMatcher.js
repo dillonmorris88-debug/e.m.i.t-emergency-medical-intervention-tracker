@@ -106,7 +106,7 @@ export const STRICT_PROCEDURE_COMMANDS = new Set([
 ]);
 
 /** Minimum confidence required to log a strict procedure command. */
-export const STRICT_PROCEDURE_MIN_CONFIDENCE = 0.85;
+export const STRICT_PROCEDURE_MIN_CONFIDENCE = 0.92;
 
 // ── Internal: regex compilation ───────────────────────────────────────────────
 
