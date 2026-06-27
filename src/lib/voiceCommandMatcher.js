@@ -151,8 +151,12 @@ const COMPILED_MAP = COMMAND_MAP.map(entry => ({
  *   null   (no match)
  *
  * Confidence ladder:
- *   0.95 — user-taught alias (most trusted)
- *   0.90 — built-in keyword hit (well-tested)
+ *   0.95 — user-taught alias OR built-in keyword/regex hit (both high-trust)
+ *
+ * NOTE: keyword hits must score at or above STRICT_PROCEDURE_MIN_CONFIDENCE
+ * (0.92), otherwise strict procedures (IV/IO/Intubation) can NEVER fire from a
+ * keyword match — which was a regression when the threshold was raised to 0.92
+ * while keyword hits still returned 0.90.
  *
  * @param {string} transcript
  * @param {Object} aliases      - { [itemKey]: string[] } from useVoiceAliases
@@ -179,10 +183,10 @@ export function matchVoiceCommand(transcript, aliases = {}, interventions = [], 
   // 2. Built-in keyword map (priority-ordered).
   for (const entry of COMPILED_MAP) {
     if (entry.patterns.some(p => p.test(t))) {
-      if (entry.action === 'rosc')        return { type: 'rosc',        confidence: 0.90 };
-      if (entry.action === 'cpr')         return { type: 'cpr',         confidence: 0.90 };
-      if (entry.action === 'discontinue') return { type: 'discontinue', confidence: 0.90 };
-      return { type: 'event', label: entry.label, category: entry.category, confidence: 0.90 };
+      if (entry.action === 'rosc')        return { type: 'rosc',        confidence: 0.95 };
+      if (entry.action === 'cpr')         return { type: 'cpr',         confidence: 0.95 };
+      if (entry.action === 'discontinue') return { type: 'discontinue', confidence: 0.95 };
+      return { type: 'event', label: entry.label, category: entry.category, confidence: 0.95 };
     }
   }
 
