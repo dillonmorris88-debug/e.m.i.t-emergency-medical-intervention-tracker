@@ -56,11 +56,14 @@ export const COMMAND_MAP = [
   { keywords: ['defibrillat', 'defibrillation', 'defibrillated', 'shocked the patient', 'delivered shock'], label: 'Defibrillation',    category: 'intervention' },
   { keywords: ['12 lead', 'twelve lead', '12-lead', 'ekg', 'e.k.g'],                                      label: '12-Lead ECG',         category: 'intervention' },
   { keywords: ['wound pack', 'wound packing'],                                                            label: 'Wound Packing',       category: 'intervention' },
-  // IV / IO: only match the bare acronym as a whole word, or the full phrase.
-  // Removed dangerous keywords: 'iv' alone, 'io' alone were OK once word-bounded,
-  // but we keep them very narrow. Whisper transcribes IV access as "IV" not "I.V."
-  { keywords: ['iv', 'i.v', 'i.v.', 'intravenous', 'iv access', 'started an iv', 'iv started'],          label: 'IV Access',           category: 'intervention' },
-  { keywords: ['io', 'i.o', 'i.o.', 'intraosseous', 'io access', 'io line', 'i.o. line'],                label: 'IO Access',           category: 'intervention' },
+  // IV / IO: DO NOT use bare acronyms ('iv', 'io', 'i.v', 'i.o') as standalone keywords.
+  // Even with word-boundary regexes, Whisper occasionally transcribes ambiguous speech
+  // ("I have", "I've", "aye") as "iv", which caused phantom IV Access logs.
+  // Only compound phrases that unambiguously mean IV/IO are permitted here.
+  // The SpeechAdaptationAgent additionally applies an IV false-positive penalty if the
+  // post-match transcript lacks one of the strict phrases (see speechAdaptationAgent.js).
+  { keywords: ['iv access', 'start iv', 'establish iv', 'iv obtained', 'iv in place', 'started an iv', 'iv started', 'intravenous access', 'get an iv', 'iv line'], label: 'IV Access', category: 'intervention' },
+  { keywords: ['io access', 'start io', 'establish io', 'io obtained', 'io in place', 'intraosseous', 'io line', 'i.o. line'],                                       label: 'IO Access', category: 'intervention' },
   { keywords: ['spinal', 'c-spine', 'c spine', 'cervical collar', 'spinal restriction'],                  label: 'Spinal Restriction',  category: 'intervention' },
   { keywords: ['bvm', 'b.v.m', 'bag valve', 'bag-valve', 'bagging the patient'],                          label: 'BVM',                 category: 'intervention' },
   // "airway" alone is ambiguous; require a qualifier or supraglottic term.

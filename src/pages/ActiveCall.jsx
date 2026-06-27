@@ -31,6 +31,7 @@ import {
 } from '@/lib/voiceLearningAgent';
 import { base44 } from '@/api/base44Client';
 import { speak } from '@/lib/speak';
+import { SpeechAdaptationAgent } from '@/lib/speechAdaptationAgent';
 
 const TABS = [
   { key: 'interventions', label: 'Interventions', icon: Syringe,   color: 'text-blue-400' },
@@ -101,6 +102,9 @@ export default function ActiveCall() {
     let c = callId ? getCall(callId) : null;
     if (!c) { c = createNewCall(); saveCall(c); }
     setCall(c);
+    // Reset per-command cooldowns at the start of each call so cooldowns
+    // from a previous call don't block commands on a new one.
+    SpeechAdaptationAgent.resetCooldowns();
   }, [callId]);
 
   useEffect(() => {
@@ -281,6 +285,13 @@ export default function ActiveCall() {
       // Nothing matched at any tier — tell the user clearly instead of failing
       // silently or guessing. Required by the IV/IO/Intubation over-match fix.
       if (!nluMatch) {
+        SpeechAdaptationAgent.log({
+          commandText: cmd, keywordMatch, agentPrediction,
+          bestLabel: null, rawConfidence, adjustedConfidence: 0,
+          ivPenaltyApplied: false, cooldownBlocked: false,
+          strictProcedureBlocked: false, confirmationRequired: false,
+          action: 'no_match', reason: 'no match at any tier',
+        });
         speak('Command not recognized');
         setLastMatchedLabel('');
         setLastConfidence(null);
@@ -291,6 +302,13 @@ export default function ActiveCall() {
       // strict procedure commands — that was the path producing phantom
       // IV / IO / Intubation logs from unclear or hallucinated speech.
       if (STRICT_PROCEDURE_COMMANDS.has(matchToLabel(nluMatch))) {
+        SpeechAdaptationAgent.log({
+          commandText: cmd, keywordMatch, agentPrediction,
+          bestLabel: matchToLabel(nluMatch), rawConfidence, adjustedConfidence: 0.65,
+          ivPenaltyApplied: false, cooldownBlocked: false,
+          strictProcedureBlocked: true, confirmationRequired: false,
+          action: 'strict_blocked', reason: 'NLU may not trigger strict procedures',
+        });
         speak('Command not recognized');
         setLastMatchedLabel('');
         setLastConfidence(null);
@@ -301,38 +319,86 @@ export default function ActiveCall() {
       bestConfidence = nluMatch.confidence ?? 0.65;
     }
 
-    setLastConfidence(bestConfidence);
-
-    // ── 5. Strict procedure guard ─────────────────────────────────────────────
-    // IV Access, IO Access, and Intubation will only fire on a clear, high
-    // confidence match. Below that bar we refuse the command outright — no
-    // confirmation prompt, no auto-execute. This kills the "any phrase with
-    // the letters iv/io/intubat triggers a procedure" class of bug.
     const bestLabel = matchToLabel(bestMatch);
-    if (STRICT_PROCEDURE_COMMANDS.has(bestLabel) && bestConfidence < STRICT_PROCEDURE_MIN_CONFIDENCE) {
+
+    // ── 5. IV false-positive penalty ──────────────────────────────────────────
+    // If the transcript doesn't contain one of the unambiguous IV phrases, lower
+    // confidence enough to drop below the strict-procedure threshold (0.85).
+    const adjustedConfidence = SpeechAdaptationAgent.applyIvFalsePositivePenalty(
+      bestLabel, cmd, bestConfidence
+    );
+    const ivPenaltyApplied = adjustedConfidence !== bestConfidence;
+    const finalConfidence  = adjustedConfidence;
+
+    // ── 6. Per-command cooldown ────────────────────────────────────────────────
+    // Prevents the same event from logging repeatedly from background speech.
+    if (SpeechAdaptationAgent.isCoolingDown(bestLabel)) {
+      SpeechAdaptationAgent.log({
+        commandText: cmd, keywordMatch, agentPrediction,
+        bestLabel, rawConfidence, adjustedConfidence: finalConfidence,
+        ivPenaltyApplied, cooldownBlocked: true,
+        strictProcedureBlocked: false, confirmationRequired: false,
+        action: 'cooldown',
+        reason: `${bestLabel} on cooldown (${Math.ceil(SpeechAdaptationAgent.cooldownRemaining(bestLabel) / 1000)}s remaining)`,
+      });
+      setLastMatchedLabel('');
+      setLastConfidence(null);
+      return;
+    }
+
+    setLastConfidence(finalConfidence);
+
+    // ── 7. Strict procedure guard ─────────────────────────────────────────────
+    // IV Access, IO Access, and Intubation will only fire on a clear, high-
+    // confidence match. Below that bar we refuse outright — no confirmation
+    // prompt, no auto-execute.
+    if (STRICT_PROCEDURE_COMMANDS.has(bestLabel) && finalConfidence < STRICT_PROCEDURE_MIN_CONFIDENCE) {
+      SpeechAdaptationAgent.log({
+        commandText: cmd, keywordMatch, agentPrediction,
+        bestLabel, rawConfidence, adjustedConfidence: finalConfidence,
+        ivPenaltyApplied, cooldownBlocked: false,
+        strictProcedureBlocked: true, confirmationRequired: false,
+        action: 'strict_blocked',
+        reason: `confidence ${finalConfidence.toFixed(2)} < ${STRICT_PROCEDURE_MIN_CONFIDENCE}`,
+      });
       speak('Command not recognized');
       setLastMatchedLabel('');
       setLastConfidence(null);
       return;
     }
 
-    // ── 6. Safety gate: confirm dangerous or uncertain commands ───────────────
-    if (shouldConfirm(bestMatch, bestConfidence)) {
+    // ── 8. Safety gate: confirm dangerous or uncertain commands ───────────────
+    if (shouldConfirm(bestMatch, finalConfidence)) {
+      SpeechAdaptationAgent.log({
+        commandText: cmd, keywordMatch, agentPrediction,
+        bestLabel, rawConfidence, adjustedConfidence: finalConfidence,
+        ivPenaltyApplied, cooldownBlocked: false,
+        strictProcedureBlocked: false, confirmationRequired: true,
+        action: 'confirm', reason: 'low confidence or always-confirm command',
+      });
       setPendingMatch({
         match:      bestMatch,
         label:      bestLabel,
-        confidence: bestConfidence,
+        confidence: finalConfidence,
         transcript: cmd,
       });
       return;
     }
 
-    // ── 7. Auto-execute ───────────────────────────────────────────────────────
+    // ── 9. Auto-execute ───────────────────────────────────────────────────────
+    SpeechAdaptationAgent.log({
+      commandText: cmd, keywordMatch, agentPrediction,
+      bestLabel, rawConfidence, adjustedConfidence: finalConfidence,
+      ivPenaltyApplied, cooldownBlocked: false,
+      strictProcedureBlocked: false, confirmationRequired: false,
+      action: 'execute', reason: 'passed all gates',
+    });
     applyMatch(bestMatch);
-    tagLastEventAsVoice(cmd, bestConfidence);
+    tagLastEventAsVoice(cmd, finalConfidence);
+    SpeechAdaptationAgent.recordFired(bestLabel);
 
-    // ── 8. Learn from successful execution (passive improvement from usage) ──
-    VoiceLearningAgent.learn(bestLabel, null, cmd, null, bestConfidence);
+    // ── 10. Learn from successful execution (passive improvement from usage) ──
+    VoiceLearningAgent.learn(bestLabel, null, cmd, null, finalConfidence);
   }, [applyMatch, tagLastEventAsVoice]);
 
   // ── Confirmation handlers ────────────────────────────────────────────────────
@@ -341,6 +407,7 @@ export default function ActiveCall() {
     if (!pendingMatch) return;
     applyMatch(pendingMatch.match);
     tagLastEventAsVoice(pendingMatch.transcript, pendingMatch.confidence);
+    SpeechAdaptationAgent.recordFired(pendingMatch.label);
     // Teach the agent: user confirmed this transcript → this command.
     VoiceLearningAgent.learn(
       pendingMatch.label,
@@ -358,19 +425,20 @@ export default function ActiveCall() {
   }, []);
 
   // ── Mark event as incorrectly interpreted ────────────────────────────────────
-  // Removes the event from the call and — if it was voice-triggered — tells
-  // the VoiceLearningAgent to weaken or forget the bad transcript→label mapping.
-  const handleMarkEventIncorrect = useCallback((event) => {
+  // Removes the event from the call. If voice-triggered, teaches the
+  // VoiceLearningAgent that the transcript → label mapping was wrong, and
+  // optionally what the correct mapping should have been (intendedLabel).
+  const handleMarkEventIncorrect = useCallback((event, intendedLabel = null) => {
     if (!event) return;
 
     // Teach the agent (only if we have voice metadata; button presses just delete)
     if (event.source === 'voice' && event.voiceTranscript) {
-      // The label stored in events for rhythms is "Rhythm: V-Fib"; the agent
-      // tracks the bare label ("V-Fib"). Strip the "Rhythm:" prefix.
+      // Rhythms are stored as "Rhythm: V-Fib"; the agent uses the bare label.
       const labelForAgent = event.category === 'rhythm'
         ? (event.label || '').replace(/^Rhythm:\s*/i, '')
         : event.label;
-      VoiceLearningAgent.recordIncorrectMatch(labelForAgent, event.voiceTranscript);
+      // recordCorrection handles both the penalty and the positive teaching.
+      VoiceLearningAgent.recordCorrection(labelForAgent, event.voiceTranscript, intendedLabel);
     }
 
     // Remove the event from the call

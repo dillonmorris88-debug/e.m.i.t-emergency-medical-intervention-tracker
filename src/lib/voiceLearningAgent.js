@@ -322,6 +322,61 @@ class VoiceLearningAgentClass {
     };
   }
 
+  /**
+   * Record that a speech event was misidentified AND the user told us what they
+   * actually intended. Combines recordIncorrectMatch() (penalize wrong label) with
+   * learn() (teach correct label) in a single call.
+   *
+   * @param {string}      incorrectLabel  - The label that was wrongly logged
+   * @param {string|null} transcript      - Original spoken phrase
+   * @param {string|null} intendedLabel   - What the user meant ('none' = no command)
+   */
+  recordCorrection(incorrectLabel, transcript, intendedLabel) {
+    // Penalize the wrong mapping so it weakens over time
+    this.recordIncorrectMatch(incorrectLabel, transcript);
+
+    // Teach the correct mapping — but only when the user named one
+    if (intendedLabel && intendedLabel !== 'none' && transcript) {
+      this.learn(intendedLabel, null, transcript, incorrectLabel, 0.90);
+    }
+
+    // Persist the correction pair for diagnostics / Training Mode display
+    const data = loadData();
+    if (!data.corrections) data.corrections = [];
+    data.corrections.push({
+      ts:       Date.now(),
+      heard:    transcript?.toLowerCase().trim() ?? null,
+      wrong:    incorrectLabel,
+      intended: intendedLabel || null,
+    });
+    // Keep the 100 most recent corrections
+    if (data.corrections.length > 100) data.corrections = data.corrections.slice(-100);
+    saveData(data);
+  }
+
+  /**
+   * Return a summary of the user's speech profile for display in the UI.
+   * Never includes protected health information — only transcript text fragments
+   * and command labels.
+   */
+  getProfile() {
+    const data = loadData();
+    const commands = data.commands || {};
+    return {
+      totalInteractions: data.totalInteractions || 0,
+      commandCount:      Object.keys(commands).length,
+      corrections:       (data.corrections || []).slice(-10).reverse(),
+      topCommands:       Object.values(commands)
+        .sort((a, b) => (b.successCount || 0) - (a.successCount || 0))
+        .slice(0, 5)
+        .map(c => ({ label: c.label, count: c.successCount || 0 })),
+      falsePositives:    Object.values(commands)
+        .flatMap(c => (c.misrecognitions || []).map(m => ({ label: c.label, phrase: m.wrong, count: m.count })))
+        .sort((a, b) => b.count - a.count)
+        .slice(0, 5),
+    };
+  }
+
   /** Return all stored learning data (for Training Mode display). */
   getLearningData() {
     return loadData().commands;
@@ -339,6 +394,11 @@ class VoiceLearningAgentClass {
    */
   clearAllData() {
     localStorage.removeItem(STORAGE_KEY);
+  }
+
+  /** Alias for clearAllData() — used by the speech profile reset button. */
+  resetProfile() {
+    this.clearAllData();
   }
 }
 
