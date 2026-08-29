@@ -58,6 +58,13 @@ export function setWhisperApiKey(key) {
 // Shorter = faster response; longer = less likely to cut off slow speakers.
 const SILENCE_MS = 1000;
 
+// How long to wait for the command after a wake word that arrived in its own
+// chunk (user said "EMIT", paused, then said the command). Without this buffer
+// the command chunk has no wake word and is silently dropped — the #1 cause of
+// "wake word flashes but nothing logs" on mobile, where the VAD naturally splits
+// the wake word from the command across two chunks.
+const WAKE_PENDING_TIMEOUT_MS = 4000;
+
 // RMS amplitude threshold (0–128 scale) above which audio counts as speech.
 // Raise if false triggers from background noise; lower if voice is not detected.
 const SPEECH_RMS_THRESHOLD = 12;
@@ -99,6 +106,10 @@ export class WhisperProvider {
     this._speaking   = false;
     this._silenceTimer = null;
     this._vadTimer   = null;
+    // Pending wake word — true when a chunk contained a wake word with no
+    // command, waiting for the next chunk to deliver the command.
+    this._wakePending   = false;
+    this._wakePendingAt = 0;
   }
 
   onWakeWord(cb) { this._wakeWordCb = cb; }
@@ -164,6 +175,8 @@ export class WhisperProvider {
     this._analyser  = null;
     this._chunks    = [];
     this._speaking  = false;
+    this._wakePending   = false;
+    this._wakePendingAt = 0;
   }
 
   // ── Internal ──────────────────────────────────────────────────────────────
@@ -269,19 +282,36 @@ export class WhisperProvider {
     if (!text) return;
     if (this._interimCb) this._interimCb('');
 
-    // Detect wake word anywhere in the transcript
+    // 1. A wake word in THIS chunk takes precedence over a pending one.
     for (const w of WAKE_WORDS) {
       if (text.includes(w)) {
         const command = text.slice(text.indexOf(w) + w.length).trim();
         if (this._wakeWordCb) this._wakeWordCb();
         if (command && this._commandCb) {
+          this._wakePending = false;
           this._commandCb({ transcript: command, confidence: WHISPER_CONFIDENCE });
+        } else {
+          // Wake word with no command — buffer and wait for the next chunk
+          // (user paused between the wake word and the command).
+          this._wakePending   = true;
+          this._wakePendingAt = Date.now();
         }
         return;
       }
     }
 
-    // No wake word — show the raw transcript so the user can see the mic is working
+    // 2. No wake word here, but a recent chunk ended on a wake word — treat
+    //    this whole chunk as the command. This is what makes "EMIT … epi"
+    //    (spoken with a pause) actually log.
+    if (this._wakePending && (Date.now() - this._wakePendingAt) < WAKE_PENDING_TIMEOUT_MS) {
+      this._wakePending = false;
+      if (this._commandCb) this._commandCb({ transcript: text, confidence: WHISPER_CONFIDENCE });
+      return;
+    }
+    this._wakePending = false;
+
+    // 3. No wake word, nothing pending — show the raw transcript so the user
+    //    can see the mic is working.
     if (this._interimCb) this._interimCb(text);
   }
 }
