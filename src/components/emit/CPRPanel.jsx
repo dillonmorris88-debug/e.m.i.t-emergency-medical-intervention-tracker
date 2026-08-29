@@ -27,20 +27,28 @@ export default function CPRPanel({ call, onEvent, onROSC, onDiscontinue, onRhyth
     return () => clearInterval(id);
   }, [call.cpr_active, call.rosc, call.discontinued]);
 
-  // CPR cycle timer — resets every 2 min
+  // Most recent rhythm declaration — restarts the 2-minute CPR cycle when it changes.
+  const rhythmEvents = (call.events || []).filter(e => e.category === 'rhythm');
+  const lastRhythmTs = rhythmEvents.length ? rhythmEvents[rhythmEvents.length - 1].timestamp : null;
+
+  // CPR cycle timer — counts down to the 2-minute pulse check. The cycle
+  // restarts at a full 2 minutes whenever a rhythm is declared.
   useEffect(() => {
     if (!call.cpr_active) return;
-    let started = Date.now();
+    const cprEvent = call.events?.find(e => e.category === 'cpr' && e.label === 'CPR Started');
+    const cprStart = cprEvent ? new Date(cprEvent.timestamp).getTime() : Date.now();
+    const started = lastRhythmTs ? new Date(lastRhythmTs).getTime() : cprStart;
     const tick = () => {
       const elapsed = Math.floor((Date.now() - started) / 1000);
       const remaining = CPR_INTERVAL - (elapsed % CPR_INTERVAL);
       setCprSeconds(remaining);
-      setCprWarning(remaining <= 20);
+      // Warn 15 seconds before the 2-minute pulse check.
+      setCprWarning(remaining <= 15);
     };
     tick();
     const id = setInterval(tick, 1000);
     return () => clearInterval(id);
-  }, [call.cpr_active]);
+  }, [call.cpr_active, lastRhythmTs]);
 
   const handleResetCPR = useCallback(() => {
     onEvent('CPR Reset', 'cpr');
