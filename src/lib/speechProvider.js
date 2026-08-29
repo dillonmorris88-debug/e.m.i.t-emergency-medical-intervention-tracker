@@ -304,10 +304,16 @@ export class WhisperProvider {
       if (!this._speaking) this._loudSince = 0;
     }
 
-    // Bound memory: drop chunks older than the keep window.
-    const cutoff = now - BUFFER_KEEP_MS;
-    while (this._chunks.length && this._chunks[0].time < cutoff) {
-      this._chunks.shift();
+    // Bound memory: drop chunks older than the keep window — but ONLY while
+    // silent. While speech is ongoing we keep every chunk so the pre-roll and
+    // the full utterance (including the wake word) survive until the segment
+    // is sliced and sent to Whisper. Trimming during speech was discarding the
+    // wake-word audio, so Whisper never saw a wake word and nothing triggered.
+    if (!this._speaking) {
+      const cutoff = now - BUFFER_KEEP_MS;
+      while (this._chunks.length && this._chunks[0].time < cutoff) {
+        this._chunks.shift();
+      }
     }
   }
 
