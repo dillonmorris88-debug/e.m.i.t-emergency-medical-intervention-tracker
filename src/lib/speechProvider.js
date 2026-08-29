@@ -139,18 +139,35 @@ export class WhisperProvider {
     this._analyser.fftSize = 256;
     source.connect(this._analyser);
 
-    // MediaRecorder — pick the best format iOS / Android / Chrome all support
-    const mimeType = this._bestMimeType();
-    this._recorder = new MediaRecorder(this._stream, mimeType ? { mimeType } : {});
-    this._recorder.ondataavailable = (e) => { if (e.data.size > 0) this._chunks.push(e.data); };
-    this._recorder.onstop = () => this._handleStop();
-    this._recorder.start(100); // 100 ms timeslice — fine-grained chunks
-
     this._active = true;
+
+    // First recorder chunk. A FRESH MediaRecorder is created for every chunk
+    // in _handleStop — reusing a stopped instance silently fails to resume on
+    // iOS Safari, which drops every command after the first wake word.
+    this._startRecorder();
 
     // VAD polling loop
     this._vadTimer = setInterval(() => this._pollVAD(), 80);
     return true;
+  }
+
+  /**
+   * Create a brand-new MediaRecorder bound to the live stream and start it.
+   * Called once from startListening() and again after every chunk flushes.
+   */
+  _startRecorder() {
+    if (!this._active || !this._stream) return;
+    const mimeType = this._bestMimeType();
+    let rec;
+    try {
+      rec = new MediaRecorder(this._stream, mimeType ? { mimeType } : {});
+    } catch {
+      return;
+    }
+    rec.ondataavailable = (e) => { if (e.data.size > 0) this._chunks.push(e.data); };
+    rec.onstop = () => this._handleStop();
+    this._recorder = rec;
+    try { rec.start(100); } catch {} // 100 ms timeslice — fine-grained chunks
   }
 
   stopListening() {
@@ -226,19 +243,22 @@ export class WhisperProvider {
   }
 
   _handleStop() {
-    // Snapshot and reset the chunk buffer immediately so the restarted
+    // Snapshot and reset the chunk buffer immediately so the new
     // recorder writes into a fresh array.
     const chunks = this._chunks.splice(0);
+    const mimeType = this._recorder?.mimeType || 'audio/webm';
 
-    // Restart recording right away to avoid missing the next utterance
-    if (this._active && this._recorder) {
-      try { this._recorder.start(100); } catch {}
-    }
+    // Spin up a FRESH recorder for the next utterance. Reusing the stopped
+    // MediaRecorder (calling start() again on the same instance) silently
+    // fails to resume on iOS Safari — the mic appears live (VAD still runs on
+    // the open stream) but no audio is ever captured again, so every command
+    // after the first wake word is lost. A new instance reliably restarts.
+    this._startRecorder();
 
     // Don't process audio while TTS is playing — prevents echo re-triggers
     if (isSpeakingSuppressed()) return;
 
-    this._transcribe(chunks, this._recorder?.mimeType || 'audio/webm');
+    this._transcribe(chunks, mimeType);
   }
 
   async _transcribe(chunks, mimeType) {
