@@ -3,40 +3,41 @@
  *
  * ── Active provider: WhisperProvider ──────────────────────────────────────────
  *   Recognition mode: CLOUD (whisper-api)
- *   Engine: OpenAI Whisper v2 via /v1/audio/transcriptions
- *   Accuracy: significantly higher than Web Speech API, especially on iOS
- *   Latency: ~1–3 s after end of utterance (VAD silence detection + API round-trip)
- *   Cost: ~$0.006/min of audio (only audio containing speech is sent)
+ *   Engine: OpenAI Whisper v1 via /v1/audio/transcriptions
+ *
+ *   Architecture (rebuilt for reliability):
+ *     ONE long-lived MediaRecorder runs for the entire session and streams
+ *     timestamped audio chunks into a rolling buffer. A hysteresis VAD
+ *     (AnalyserNode RMS) detects speech segments. When speech ends, the
+ *     segment — including a PRE-ROLL window before speech was confirmed — is
+ *     sliced from the buffer and sent to Whisper as a single complete
+ *     utterance. The recorder is never stopped mid-session, which eliminates
+ *     the iOS Safari "recorder won't restart" failure and the audio gaps
+ *     between utterances that were dropping commands.
+ *
+ *   Wake word: "EMIT" (and variants). Detection is fuzzy — the first word of
+ *   the transcript is accepted if it is within edit distance 2 of "emit",
+ *   so common Whisper mis-hears ("amit", "emet", "emit") still trigger.
+ *
  *   Requirements: OpenAI API key stored in localStorage under 'emit_whisper_key'
- *   Audio storage: audio blobs are sent to OpenAI and then discarded — never persisted locally
  *
  * ── Fallback: WebSpeechProvider ──────────────────────────────────────────────
  *   Used automatically when no Whisper API key is configured.
  *   Recognition mode: OFFLINE (browser-native Web Speech API)
- *   Limitations: unreliable on iOS Safari continuous mode
  *
- * ── How WhisperProvider works ─────────────────────────────────────────────────
- *   1. getUserMedia() opens the microphone.
- *   2. AudioContext + AnalyserNode performs RMS-based voice activity detection (VAD).
- *   3. MediaRecorder captures the raw audio stream.
- *   4. When the RMS level drops below the speech threshold for SILENCE_MS (1000 ms),
- *      the current recording chunk is flushed and sent to the Whisper API.
- *   5. The Whisper transcript is checked for a wake word ("EMIT" and variants).
- *   6. If found, onWakeWord() fires, the trailing text is extracted as the command,
- *      and onCommand() fires with { transcript, confidence: 0.92 }.
- *   7. isSpeakingSuppressed() (from speak.js) blocks processing during TTS playback
- *      so confirmation audio cannot re-trigger commands.
- *
- * ── Switching providers ───────────────────────────────────────────────────────
- *   Set/clear the API key via setWhisperApiKey() and the next createProvider()
- *   call automatically returns the correct provider.
+ *   Switch providers via setWhisperApiKey() / getWhisperApiKey().
  */
 
 import { isSpeakingSuppressed } from './speak.js';
 
 // ── Shared constants ──────────────────────────────────────────────────────────
 
-const WAKE_WORDS = ['emit', 'emmet', 'emmit', 'emitt', 'e.m.i.t', 'e.m.i.t.', 'a mit', 'a-mit', 'e mit'];
+const WAKE_WORDS = [
+  'hey emit', 'hey emmet',
+  'emit', 'emmet', 'emmit', 'emitt',
+  'e mit', 'e-mit', 'a mit', 'a-mit',
+  'e.m.i.t', 'e.m.i.t.',
+];
 const WHISPER_KEY_STORAGE = 'emit_whisper_key';
 
 /** Read the stored Whisper API key. Returns '' if not set. */
@@ -52,36 +53,89 @@ export function setWhisperApiKey(key) {
   } catch {}
 }
 
-// ── WhisperProvider ───────────────────────────────────────────────────────────
+// ── Wake-word matching helpers ───────────────────────────────────────────────
 
-// Silence duration (ms) after last speech sample before the chunk is sent to Whisper.
-// Shorter = faster response; longer = less likely to cut off slow speakers.
-const SILENCE_MS = 1000;
+/** Levenshtein edit distance between two short strings. */
+function levenshtein(a, b) {
+  const m = a.length, n = b.length;
+  if (!m) return n; if (!n) return m;
+  let prev = Array.from({ length: m + 1 }, (_, i) => i);
+  let curr = new Array(m + 1);
+  for (let j = 1; j <= n; j++) {
+    curr[0] = j;
+    for (let i = 1; i <= m; i++) {
+      curr[i] = Math.min(
+        curr[i - 1] + 1,
+        prev[i] + 1,
+        prev[i - 1] + (a[i - 1] === b[j - 1] ? 0 : 1),
+      );
+    }
+    [prev, curr] = [curr, prev];
+  }
+  return prev[m];
+}
 
-// How long to wait for the command after a wake word that arrived in its own
-// chunk (user said "EMIT", paused, then said the command). Without this buffer
-// the command chunk has no wake word and is silently dropped — the #1 cause of
-// "wake word flashes but nothing logs" on mobile, where the VAD naturally splits
-// the wake word from the command across two chunks.
-const WAKE_PENDING_TIMEOUT_MS = 4000;
-
-// RMS amplitude threshold (0–128 scale) above which audio counts as speech.
-// Raise if false triggers from background noise; lower if voice is not detected.
-const SPEECH_RMS_THRESHOLD = 12;
-
-// Ignore audio blobs smaller than this — they are almost certainly noise frames.
-const MIN_CHUNK_BYTES = 3000;
-
-// Whisper is highly accurate; treat its results as 0.92 confidence.
-const WHISPER_CONFIDENCE = 0.92;
+const WAKE_TARGETS = ['emit', 'emmet', 'emitt'];
 
 /**
- * Medical-context prompt sent with every Whisper request.
- *
- * Whisper's `prompt` parameter biases the model toward the listed vocabulary —
- * critical for medication names and acronyms it would otherwise mishear
- * ("amio" → "ammo", "Ofirmev" → "off her math", "PEA" → "pee a", etc).
- * Keep under ~224 tokens (Whisper's limit). Order matters less than coverage.
+ * Detect a wake word in a lowercased transcript.
+ * Returns { word, index } where index >= 0 for a substring hit, or -1 for a
+ * fuzzy first-word hit. Returns null if no wake word.
+ */
+function detectWakeWord(text) {
+  // 1. Exact substring match (preferred).
+  for (const w of WAKE_WORDS) {
+    const i = text.indexOf(w);
+    if (i >= 0) return { word: w, index: i };
+  }
+  // 2. Fuzzy first-word match — covers Whisper mis-hears ("amit", "emet", "imit").
+  const firstWord = (text.split(/\s+/)[0] || '').replace(/[^a-z]/g, '');
+  if (firstWord.length >= 3 && (firstWord[0] === 'e' || firstWord[0] === 'a')) {
+    for (const target of WAKE_TARGETS) {
+      if (levenshtein(firstWord, target) <= 2) return { word: target, index: -1 };
+    }
+  }
+  return null;
+}
+
+/** Extract the command text that follows a detected wake word. */
+function extractCommand(text, wake) {
+  if (wake.index >= 0) {
+    return text.slice(wake.index + wake.word.length).trim();
+  }
+  // Fuzzy first-word match — drop the first word, keep the rest.
+  return text.split(/\s+/).slice(1).join(' ').trim();
+}
+
+// ── WhisperProvider ───────────────────────────────────────────────────────────
+
+// VAD thresholds on the 0–128 RMS scale. Hysteresis: RMS must exceed START to
+// begin a speech segment, then drop below END for the silence timer to elapse.
+const VAD_START_THRESHOLD = 10;
+const VAD_END_THRESHOLD   = 6;
+// RMS must stay above START this long before speech is confirmed (debounces
+// transient clicks / door slams).
+const SPEECH_CONFIRM_MS = 140;
+// Silence after confirmed speech before the utterance is sent to Whisper.
+const SILENCE_MS = 1200;
+// Audio retained before speech confirmation so the wake word is never cut off.
+const PREROLL_MS = 1500;
+// Max utterance length sent to Whisper (safety against runaway segments).
+const MAX_UTTERANCE_MS = 15000;
+// Drop segments smaller than this — they are noise frames, not speech.
+const MIN_SEGMENT_BYTES = 500;
+// How long the rolling buffer keeps audio (bounds memory between utterances).
+const BUFFER_KEEP_MS = 3000;
+// Whisper is highly accurate; treat its results as 0.92 confidence.
+const WHISPER_CONFIDENCE = 0.92;
+// If a wake word arrives in its own utterance, wait this long for the command
+// in the next utterance (user paused between "EMIT" and the command).
+const WAKE_PENDING_TIMEOUT_MS = 4000;
+
+/**
+ * Medical-context prompt sent with every Whisper request. Biases the model
+ * toward medication names and EMS acronyms it would otherwise mishear.
+ * Keep under ~224 tokens (Whisper's prompt limit).
  */
 const MEDICAL_PROMPT = [
   'Paramedic logging emergency interventions. Wake word: EMIT or Hey EMIT.',
@@ -102,12 +156,15 @@ export class WhisperProvider {
     this._recorder   = null;
     this._audioCtx   = null;
     this._analyser   = null;
+    // Rolling buffer of { blob, time } chunks from the long-lived recorder.
     this._chunks     = [];
-    this._speaking   = false;
+    // VAD state
+    this._vadTimer    = null;
     this._silenceTimer = null;
-    this._vadTimer   = null;
-    // Pending wake word — true when a chunk contained a wake word with no
-    // command, waiting for the next chunk to deliver the command.
+    this._loudSince    = 0;     // when RMS first rose above START (confirm window)
+    this._speaking     = false; // speech confirmed and ongoing
+    this._speechStart  = 0;     // segment start (incl. pre-roll), set on confirm
+    // Pending wake word from a wake-only utterance, awaiting the command.
     this._wakePending   = false;
     this._wakePendingAt = 0;
   }
@@ -126,48 +183,49 @@ export class WhisperProvider {
     if (!this.isSupported || this._active) return false;
     try {
       this._stream = await navigator.mediaDevices.getUserMedia({
-        audio: { channelCount: 1, sampleRate: 16000 },
+        audio: {
+          channelCount: 1,
+          sampleRate: 16000,
+          echoCancellation: true,
+          noiseSuppression: true,
+          autoGainControl: true,
+        },
       });
     } catch {
       return false;
     }
 
-    // AudioContext for VAD
+    // AudioContext + Analyser for RMS voice-activity detection.
     this._audioCtx = new (window.AudioContext || window.webkitAudioContext)();
     const source   = this._audioCtx.createMediaStreamSource(this._stream);
     this._analyser = this._audioCtx.createAnalyser();
-    this._analyser.fftSize = 256;
+    this._analyser.fftSize = 512;
     source.connect(this._analyser);
 
     this._active = true;
 
-    // First recorder chunk. A FRESH MediaRecorder is created for every chunk
-    // in _handleStop — reusing a stopped instance silently fails to resume on
-    // iOS Safari, which drops every command after the first wake word.
-    this._startRecorder();
-
-    // VAD polling loop
-    this._vadTimer = setInterval(() => this._pollVAD(), 80);
-    return true;
-  }
-
-  /**
-   * Create a brand-new MediaRecorder bound to the live stream and start it.
-   * Called once from startListening() and again after every chunk flushes.
-   */
-  _startRecorder() {
-    if (!this._active || !this._stream) return;
+    // ONE long-lived MediaRecorder for the whole session. It is never stopped
+    // until stopListening() — eliminating the iOS Safari restart failure and
+    // the inter-utterance audio gaps that were dropping commands.
     const mimeType = this._bestMimeType();
     let rec;
     try {
       rec = new MediaRecorder(this._stream, mimeType ? { mimeType } : {});
     } catch {
-      return;
+      this._teardownStream();
+      this._active = false;
+      return false;
     }
-    rec.ondataavailable = (e) => { if (e.data.size > 0) this._chunks.push(e.data); };
-    rec.onstop = () => this._handleStop();
+    rec.ondataavailable = (e) => {
+      if (e.data && e.data.size > 0) {
+        this._chunks.push({ blob: e.data, time: Date.now() });
+      }
+    };
     this._recorder = rec;
-    try { rec.start(100); } catch {} // 100 ms timeslice — fine-grained chunks
+    try { rec.start(200); } catch {} // 200 ms timeslice → rolling buffer
+
+    this._vadTimer = setInterval(() => this._pollVAD(), 50);
+    return true;
   }
 
   stopListening() {
@@ -180,20 +238,26 @@ export class WhisperProvider {
     if (this._recorder && this._recorder.state !== 'inactive') {
       try { this._recorder.stop(); } catch {}
     }
+    this._teardownStream();
+    this._recorder = null;
+    this._analyser  = null;
+    this._chunks    = [];
+    this._loudSince = 0;
+    this._speaking  = false;
+    this._speechStart = 0;
+    this._wakePending   = false;
+    this._wakePendingAt = 0;
+  }
+
+  _teardownStream() {
     if (this._stream) {
-      this._stream.getTracks().forEach(t => t.stop());
+      this._stream.getTracks().forEach((t) => t.stop());
       this._stream = null;
     }
     if (this._audioCtx && this._audioCtx.state !== 'closed') {
       this._audioCtx.close().catch(() => {});
       this._audioCtx = null;
     }
-    this._recorder = null;
-    this._analyser  = null;
-    this._chunks    = [];
-    this._speaking  = false;
-    this._wakePending   = false;
-    this._wakePendingAt = 0;
   }
 
   // ── Internal ──────────────────────────────────────────────────────────────
@@ -205,7 +269,7 @@ export class WhisperProvider {
       'audio/ogg;codecs=opus',
       'audio/mp4',           // iOS Safari
     ];
-    return candidates.find(t => MediaRecorder.isTypeSupported(t)) ?? '';
+    return candidates.find((t) => MediaRecorder.isTypeSupported(t)) ?? '';
   }
 
   _pollVAD() {
@@ -214,59 +278,67 @@ export class WhisperProvider {
     const buf = new Uint8Array(this._analyser.frequencyBinCount);
     this._analyser.getByteTimeDomainData(buf);
 
-    // RMS energy: centre value is 128 (silence), deviation = amplitude
+    // RMS energy: centre is 128 (silence); deviation = amplitude.
     let sum = 0;
     for (const v of buf) sum += (v - 128) ** 2;
     const rms = Math.sqrt(sum / buf.length);
+    const now = Date.now();
 
-    if (rms > SPEECH_RMS_THRESHOLD) {
-      if (!this._speaking) {
+    if (rms > VAD_START_THRESHOLD) {
+      if (!this._loudSince) this._loudSince = now;
+      // Confirm speech only after a brief sustained loudness (debounces clicks).
+      if (!this._speaking && now - this._loudSince >= SPEECH_CONFIRM_MS) {
         this._speaking = true;
-        // Show a live "listening" dot in the UI while the user is speaking
+        // Start the segment a bit BEFORE confirmation so the wake word — often
+        // spoken right at the start of the utterance — is captured in full.
+        this._speechStart = now - PREROLL_MS;
         if (this._interimCb) this._interimCb('…');
       }
-      // Reset the silence countdown every time voice is detected
-      clearTimeout(this._silenceTimer);
-      this._silenceTimer = setTimeout(() => {
-        if (this._active && this._speaking) {
-          this._speaking = false;
-          this._flush();
-        }
-      }, SILENCE_MS);
+      if (this._speaking) {
+        // Reset the silence countdown on every loud sample while speaking.
+        clearTimeout(this._silenceTimer);
+        this._silenceTimer = setTimeout(() => this._endOfUtterance(), SILENCE_MS);
+      }
+    } else if (rms < VAD_END_THRESHOLD) {
+      // Brief loudness that never confirmed was just a click — reset.
+      if (!this._speaking) this._loudSince = 0;
+    }
+
+    // Bound memory: drop chunks older than the keep window.
+    const cutoff = now - BUFFER_KEEP_MS;
+    while (this._chunks.length && this._chunks[0].time < cutoff) {
+      this._chunks.shift();
     }
   }
 
-  _flush() {
-    if (!this._recorder || this._recorder.state !== 'recording') return;
-    // stop() triggers onstop → _handleStop()
-    try { this._recorder.stop(); } catch {}
-  }
+  _endOfUtterance() {
+    if (!this._active || !this._speaking) return;
+    this._speaking  = false;
+    this._loudSince = 0;
 
-  _handleStop() {
-    // Snapshot and reset the chunk buffer immediately so the new
-    // recorder writes into a fresh array.
-    const chunks = this._chunks.splice(0);
-    const mimeType = this._recorder?.mimeType || 'audio/webm';
+    const end = Date.now();
+    let start = this._speechStart;
+    if (end - start > MAX_UTTERANCE_MS) start = end - MAX_UTTERANCE_MS;
 
-    // Spin up a FRESH recorder for the next utterance. Reusing the stopped
-    // MediaRecorder (calling start() again on the same instance) silently
-    // fails to resume on iOS Safari — the mic appears live (VAD still runs on
-    // the open stream) but no audio is ever captured again, so every command
-    // after the first wake word is lost. A new instance reliably restarts.
-    this._startRecorder();
+    // Slice the speech segment (pre-roll → now) from the rolling buffer.
+    const blobs = [];
+    for (const c of this._chunks) {
+      if (c.time >= start) blobs.push(c.blob);
+    }
+    if (!blobs.length) return;
 
-    // Don't process audio while TTS is playing — prevents echo re-triggers
+    // Don't process audio while TTS is playing — prevents echo re-triggers.
     if (isSpeakingSuppressed()) return;
 
-    this._transcribe(chunks, mimeType);
+    const mimeType = this._recorder?.mimeType || 'audio/webm';
+    this._transcribe(blobs, mimeType);
   }
 
-  async _transcribe(chunks, mimeType) {
-    if (!chunks.length) return;
-    const blob = new Blob(chunks, { type: mimeType });
-    if (blob.size < MIN_CHUNK_BYTES) return;
+  async _transcribe(blobs, mimeType) {
+    const total = blobs.reduce((n, b) => n + b.size, 0);
+    if (total < MIN_SEGMENT_BYTES) return;
 
-    // Derive a filename extension Whisper will accept
+    const blob = new Blob(blobs, { type: mimeType });
     const ext = mimeType.includes('mp4') ? 'm4a'
               : mimeType.includes('ogg') ? 'ogg'
               : 'webm';
@@ -275,10 +347,7 @@ export class WhisperProvider {
     form.append('file', blob, `audio.${ext}`);
     form.append('model', 'whisper-1');
     form.append('language', 'en');
-    // Bias Whisper toward medical vocabulary — dramatically improves
-    // recognition of drug names, acronyms (PEA, SVT, BVM), and EMS jargon.
     form.append('prompt', MEDICAL_PROMPT);
-    // Lower temperature = more deterministic; we want stable, repeatable matches.
     form.append('temperature', '0');
 
     let text;
@@ -302,36 +371,33 @@ export class WhisperProvider {
     if (!text) return;
     if (this._interimCb) this._interimCb('');
 
-    // 1. A wake word in THIS chunk takes precedence over a pending one.
-    for (const w of WAKE_WORDS) {
-      if (text.includes(w)) {
-        const command = text.slice(text.indexOf(w) + w.length).trim();
-        if (this._wakeWordCb) this._wakeWordCb();
-        if (command && this._commandCb) {
-          this._wakePending = false;
-          this._commandCb({ transcript: command, confidence: WHISPER_CONFIDENCE });
-        } else {
-          // Wake word with no command — buffer and wait for the next chunk
-          // (user paused between the wake word and the command).
-          this._wakePending   = true;
-          this._wakePendingAt = Date.now();
-        }
-        return;
+    const wake = detectWakeWord(text);
+    if (wake) {
+      const command = extractCommand(text, wake);
+      if (this._wakeWordCb) this._wakeWordCb();
+      if (command && this._commandCb) {
+        this._wakePending = false;
+        this._commandCb({ transcript: command, confidence: WHISPER_CONFIDENCE });
+      } else {
+        // Wake word with no command — buffer and wait for the next utterance
+        // (user paused between the wake word and the command).
+        this._wakePending   = true;
+        this._wakePendingAt = Date.now();
       }
+      return;
     }
 
-    // 2. No wake word here, but a recent chunk ended on a wake word — treat
-    //    this whole chunk as the command. This is what makes "EMIT … epi"
-    //    (spoken with a pause) actually log.
-    if (this._wakePending && (Date.now() - this._wakePendingAt) < WAKE_PENDING_TIMEOUT_MS) {
+    // No wake word here, but a recent utterance ended on a wake word — treat
+    // this whole utterance as the command.
+    if (this._wakePending && Date.now() - this._wakePendingAt < WAKE_PENDING_TIMEOUT_MS) {
       this._wakePending = false;
       if (this._commandCb) this._commandCb({ transcript: text, confidence: WHISPER_CONFIDENCE });
       return;
     }
     this._wakePending = false;
 
-    // 3. No wake word, nothing pending — show the raw transcript so the user
-    //    can see the mic is working.
+    // No wake word, nothing pending — show the raw transcript so the user can
+    // see the mic is working.
     if (this._interimCb) this._interimCb(text);
   }
 }
@@ -388,15 +454,13 @@ export class WebSpeechProvider {
       if (finalAlts.length > 0) {
         let best = null;
         for (const alt of finalAlts) {
-          for (const w of WAKE_WORDS) {
-            if (alt.transcript.includes(w)) {
-              if (!best || alt.confidence > best.confidence) best = { ...alt, wakeWord: w };
-              break;
-            }
+          const wake = detectWakeWord(alt.transcript);
+          if (wake && (!best || alt.confidence > best.confidence)) {
+            best = { ...alt, wake };
           }
         }
         if (best) {
-          const command = best.transcript.slice(best.transcript.indexOf(best.wakeWord) + best.wakeWord.length).trim();
+          const command = extractCommand(best.transcript, best.wake);
           if (this._wakeWordCb) this._wakeWordCb();
           if (this._interimCb)  this._interimCb('');
           if (command && this._commandCb) this._commandCb({ transcript: command, confidence: best.confidence });
@@ -425,17 +489,13 @@ export class WebSpeechProvider {
 
 // ── Factory ───────────────────────────────────────────────────────────────────
 
-/**
- * Human-readable label for the active recognition mode.
- * Derived at module load time — reflects whatever key is stored right now.
- * The VoiceIndicator reads this to show the mode badge.
- */
+/** Human-readable label for the active recognition mode. */
 export const RECOGNITION_MODE = getWhisperApiKey() ? 'whisper-api' : 'offline';
 
 /**
  * Return a configured provider.
  *   - Whisper API key present → WhisperProvider (cloud, high accuracy)
- *   - No key             → WebSpeechProvider (offline, browser-native fallback)
+ *   - No key                  → WebSpeechProvider (offline, browser-native fallback)
  */
 export function createProvider() {
   const key = getWhisperApiKey();
