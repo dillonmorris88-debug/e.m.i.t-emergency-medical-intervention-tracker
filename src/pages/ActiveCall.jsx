@@ -74,6 +74,18 @@ function shouldConfirm(match, confidence) {
   return false;
 }
 
+/**
+ * Recognition confidence (from the speech engine, not the keyword matcher)
+ * below which the audio itself is too uncertain to act on without a tap.
+ * Whisper reports the mean token probability; clear speech scores ~0.6–0.95.
+ */
+const LOW_ASR_CONFIDENCE = 0.45;
+
+/** True when the engine reported a confidence and it was low. Null = unknown. */
+function isLowAsrConfidence(rawConfidence) {
+  return typeof rawConfidence === 'number' && rawConfidence > 0 && rawConfidence < LOW_ASR_CONFIDENCE;
+}
+
 export default function ActiveCall() {
   const { callId } = useParams();
   const navigate = useNavigate();
@@ -352,14 +364,18 @@ export default function ActiveCall() {
     // IV Access, IO Access, and Intubation will only fire on a clear, high-
     // confidence match. Below that bar we refuse outright — no confirmation
     // prompt, no auto-execute.
-    if (STRICT_PROCEDURE_COMMANDS.has(bestLabel) && finalConfidence < STRICT_PROCEDURE_MIN_CONFIDENCE) {
+    const lowAsrConfidence = isLowAsrConfidence(rawConfidence);
+    if (STRICT_PROCEDURE_COMMANDS.has(bestLabel) &&
+        (finalConfidence < STRICT_PROCEDURE_MIN_CONFIDENCE || lowAsrConfidence)) {
       SpeechAdaptationAgent.log({
         commandText: cmd, keywordMatch, agentPrediction,
         bestLabel, rawConfidence, adjustedConfidence: finalConfidence,
         ivPenaltyApplied, cooldownBlocked: false,
         strictProcedureBlocked: true, confirmationRequired: false,
         action: 'strict_blocked',
-        reason: `confidence ${finalConfidence.toFixed(2)} < ${STRICT_PROCEDURE_MIN_CONFIDENCE}`,
+        reason: lowAsrConfidence
+          ? `recognition confidence ${rawConfidence.toFixed(2)} < ${LOW_ASR_CONFIDENCE}`
+          : `confidence ${finalConfidence.toFixed(2)} < ${STRICT_PROCEDURE_MIN_CONFIDENCE}`,
       });
       speak('Command not recognized');
       setLastMatchedLabel('');
@@ -368,13 +384,16 @@ export default function ActiveCall() {
     }
 
     // ── 8. Safety gate: confirm dangerous or uncertain commands ───────────────
-    if (shouldConfirm(bestMatch, finalConfidence)) {
+    if (shouldConfirm(bestMatch, finalConfidence) || lowAsrConfidence) {
       SpeechAdaptationAgent.log({
         commandText: cmd, keywordMatch, agentPrediction,
         bestLabel, rawConfidence, adjustedConfidence: finalConfidence,
         ivPenaltyApplied, cooldownBlocked: false,
         strictProcedureBlocked: false, confirmationRequired: true,
-        action: 'confirm', reason: 'low confidence or always-confirm command',
+        action: 'confirm',
+        reason: lowAsrConfidence
+          ? 'unclear audio (low recognition confidence)'
+          : 'low confidence or always-confirm command',
       });
       setPendingMatch({
         match:      bestMatch,

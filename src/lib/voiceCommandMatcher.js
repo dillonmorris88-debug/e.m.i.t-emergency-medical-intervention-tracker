@@ -53,7 +53,7 @@ export const COMMAND_MAP = [
   { keywords: ['intubat', 'endotracheal', 'e.t.t'],                                                       label: 'Intubation',          category: 'intervention' },
   { keywords: ['needle decompress', 'needle decompression'],                                              label: 'Needle Decompression',category: 'intervention' },
   { keywords: ['cardiovert', 'cardioversion'],                                                            label: 'Cardioversion',       category: 'intervention' },
-  { keywords: ['defibrillat', 'defibrillation', 'defibrillated', 'shocked the patient', 'delivered shock'], label: 'Defibrillation',    category: 'intervention' },
+  { keywords: ['defib', 'defibrillat', 'defibrillation', 'defibrillated', 'shocked the patient', 'delivered shock'], label: 'Defibrillation',    category: 'intervention' },
   { keywords: ['12 lead', 'twelve lead', '12-lead', 'ekg', 'e.k.g'],                                      label: '12-Lead ECG',         category: 'intervention' },
   { keywords: ['wound pack', 'wound packing'],                                                            label: 'Wound Packing',       category: 'intervention' },
   // IV / IO: DO NOT use bare acronyms ('iv', 'io', 'i.v', 'i.o') as standalone keywords.
