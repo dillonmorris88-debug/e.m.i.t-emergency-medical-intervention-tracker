@@ -13,7 +13,12 @@ import EventLog from '@/components/emit/EventLog';
 import VoiceIndicator from '@/components/emit/VoiceIndicator';
 import VoiceConfirmModal from '@/components/emit/VoiceConfirmModal';
 import TrainingModeModal from '@/components/emit/TrainingModeModal';
+import { TEACH_HIGHLIGHT } from '@/components/emit/DraggableButtonGrid';
 import BugReportModal from '@/components/emit/BugReportModal';
+import MissedCommandBanner from '@/components/emit/MissedCommandBanner';
+import { getCustomButtons } from '@/components/emit/AddCustomButtonModal';
+import { AnimatePresence } from 'framer-motion';
+import { splitMissedUtterance } from '@/lib/speechProvider';
 import { getVoiceAliases } from '@/hooks/useVoiceAliases';
 import { INTERVENTIONS, MEDICATIONS, RHYTHMS } from '@/lib/eventData';
 import {
@@ -86,6 +91,26 @@ function isLowAsrConfidence(rawConfidence) {
   return typeof rawConfidence === 'number' && rawConfidence > 0 && rawConfidence < LOW_ASR_CONFIDENCE;
 }
 
+// "Missed command" offers utterances heard within this window.
+const HEARD_HISTORY_MAX = 5;
+const HEARD_HISTORY_MS  = 2 * 60 * 1000;
+// How long the "Learned …" confirmation stays up.
+const MISSED_LEARNED_DISMISS_MS = 4000;
+
+/** Recent heard utterances that have something teachable, most recent first. */
+function buildMissedOptions(heard) {
+  const now = Date.now();
+  const wakeTokens = VoiceLearningAgent.getWakeVariants();
+  return heard
+    .filter(h => now - h.at <= HEARD_HISTORY_MS)
+    .map(h => {
+      const split = splitMissedUtterance(h.text, wakeTokens);
+      return split ? { ...h, ...split } : null;
+    })
+    .filter(Boolean)
+    .reverse();
+}
+
 export default function ActiveCall() {
   const { callId } = useParams();
   const navigate = useNavigate();
@@ -106,9 +131,19 @@ export default function ActiveCall() {
   const [pendingMatch, setPendingMatch] = useState(null);
   // { match, label, confidence, transcript }
 
+  // "Missed command" teaching flow:
+  // null | { options, selectedId, learned: null | { label, phrase, wakeVariant } }
+  const [missed, setMissed] = useState(null);
+
   const recognitionRef    = useRef(null);
   const wakeTimerRef      = useRef(null);
   const voiceCommandRef   = useRef(null);
+  const heardRef          = useRef([]);   // recent final transcripts, oldest first
+  const missedRef         = useRef(null); // mirrors `missed` for button callbacks
+  const missedTimerRef    = useRef(null);
+
+  useEffect(() => { missedRef.current = missed; }, [missed]);
+  useEffect(() => () => clearTimeout(missedTimerRef.current), []);
 
   useEffect(() => {
     let c = callId ? getCall(callId) : null;
@@ -443,6 +478,65 @@ export default function ActiveCall() {
     setPendingMatch(null);
   }, []);
 
+  // ── Missed command teaching ──────────────────────────────────────────────────
+  // The user taps "Missed command", picks what they said from recent heard
+  // utterances, then taps the button they meant. The button's normal action
+  // runs, and the heard phrasing is taught to the speech pipeline for this user.
+
+  const handleHeard = useCallback(({ text, confidence, at }) => {
+    heardRef.current = [
+      ...heardRef.current,
+      { id: crypto.randomUUID(), text, confidence, at },
+    ].slice(-HEARD_HISTORY_MAX);
+
+    // Keep an open picker current, preserving the user's selection.
+    const state = missedRef.current;
+    if (state && !state.learned) {
+      const options = buildMissedOptions(heardRef.current);
+      const keep = options.some(o => o.id === state.selectedId);
+      setMissed({ ...state, options, selectedId: keep ? state.selectedId : (options[0]?.id ?? null) });
+    }
+  }, []);
+
+  const toggleMissedCommand = useCallback(() => {
+    clearTimeout(missedTimerRef.current);
+    if (missedRef.current) { setMissed(null); return; }
+    const options = buildMissedOptions(heardRef.current);
+    setMissed({ options, selectedId: options[0]?.id ?? null, learned: null });
+  }, []);
+
+  /** Call right AFTER a button's action has run, with that command's label. */
+  const teachFromButton = useCallback((label) => {
+    const state = missedRef.current;
+    if (!state || state.learned) return;
+    const option = state.options.find(o => o.id === state.selectedId);
+    if (!option) return;
+
+    VoiceLearningAgent.learnMissedCommand(label, option.command, option.text, option.wakeVariant);
+    recognitionRef.current?.refreshLearning?.();
+    // Tag the logged event with the taught phrase so "mark incorrect" in the
+    // Event Log can undo a mistaken teaching.
+    tagLastEventAsVoice(option.command, option.confidence);
+
+    const learnedState = {
+      ...state,
+      learned: { label, phrase: option.command, wakeVariant: option.wakeVariant },
+    };
+    missedRef.current = learnedState;
+    setMissed(learnedState);
+    clearTimeout(missedTimerRef.current);
+    missedTimerRef.current = setTimeout(() => setMissed(null), MISSED_LEARNED_DISMISS_MS);
+  }, [tagLastEventAsVoice]);
+
+  // Button handlers: run the normal action, then teach if the picker is open.
+  const onButtonEvent    = useCallback((label, category) => { addEvent(label, category); teachFromButton(label); }, [addEvent, teachFromButton]);
+  const onButtonCPR      = useCallback(() => { startCPR(); teachFromButton('CPR Started'); }, [startCPR, teachFromButton]);
+  const onButtonROSC     = useCallback(() => { handleROSC(); teachFromButton('ROSC'); }, [handleROSC, teachFromButton]);
+  const onButtonDiscontinue = useCallback(() => { handleDiscontinue(); teachFromButton('Efforts Discontinued'); }, [handleDiscontinue, teachFromButton]);
+  const onButtonRhythm   = useCallback((rhythm) => { markRhythm(rhythm); teachFromButton(rhythm); }, [markRhythm, teachFromButton]);
+
+  const teaching = !!missed && !missed.learned && missed.options.length > 0;
+
   // ── Mark event as incorrectly interpreted ────────────────────────────────────
   // Removes the event from the call. If voice-triggered, teaches the
   // VoiceLearningAgent that the transcript → label mapping was wrong, and
@@ -509,10 +603,11 @@ export default function ActiveCall() {
         setLiveTranscript('');
         voiceCommandRef.current?.(cmd, confidence);
       },
-      (interim) => setLiveTranscript(interim)
+      (interim) => setLiveTranscript(interim),
+      handleHeard
     );
     if (recognitionRef.current) setListening(true);
-  }, []);
+  }, [handleHeard]);
 
   const stopListening = useCallback(() => {
     stopVoiceRecognition(recognitionRef.current);
@@ -588,15 +683,29 @@ export default function ActiveCall() {
             stopListening();
             setShowTraining(true);
           }}
+          onMissedCommand={toggleMissedCommand}
+          missedCommandActive={!!missed}
         />
       </div>
+
+      {/* Missed command teaching flow */}
+      <AnimatePresence>
+        {missed && (
+          <MissedCommandBanner
+            key="missed-command"
+            state={missed}
+            onSelect={(id) => setMissed(prev => prev && { ...prev, selectedId: id })}
+            onCancel={() => { clearTimeout(missedTimerRef.current); setMissed(null); }}
+          />
+        )}
+      </AnimatePresence>
 
       {/* CPR Button or Panel */}
       <div className="px-4 pt-3">
         {!call.cpr_active && !call.rosc && !call.discontinued ? (
           <button
-            onClick={startCPR}
-            className="w-full flex items-center justify-center gap-3 py-4 rounded-xl font-bold text-base border-2 border-red-500/60 bg-red-500/15 text-red-300 hover:bg-red-500/25 hover:border-red-400 btn-tap glow-red transition-all"
+            onClick={onButtonCPR}
+            className={`w-full flex items-center justify-center gap-3 py-4 rounded-xl font-bold text-base border-2 border-red-500/60 bg-red-500/15 text-red-300 hover:bg-red-500/25 hover:border-red-400 btn-tap glow-red transition-all ${teaching ? TEACH_HIGHLIGHT : ''}`}
           >
             <Heart className="w-5 h-5" fill="currentColor" />
             CPR IN PROGRESS
@@ -614,9 +723,10 @@ export default function ActiveCall() {
           <CPRPanel
             call={call}
             onEvent={addEvent}
-            onROSC={handleROSC}
-            onDiscontinue={handleDiscontinue}
-            onRhythm={markRhythm}
+            onROSC={onButtonROSC}
+            onDiscontinue={onButtonDiscontinue}
+            onRhythm={onButtonRhythm}
+            highlight={teaching}
           />
         )}
       </div>
@@ -643,18 +753,20 @@ export default function ActiveCall() {
       <div className="flex-1 overflow-y-auto px-4 py-3 pb-6">
         {activeTab === 'interventions' && (
           <InterventionPanel
-            onEvent={addEvent}
+            onEvent={onButtonEvent}
             onBugReport={() => setShowBugReport(true)}
             onVoicePause={stopListening}
             onVoiceResume={startListening}
+            highlight={teaching}
           />
         )}
         {activeTab === 'medications' && (
           <MedicationPanel
-            onEvent={addEvent}
+            onEvent={onButtonEvent}
             onBugReport={() => setShowBugReport(true)}
             onVoicePause={stopListening}
             onVoiceResume={startListening}
+            highlight={teaching}
           />
         )}
         {activeTab === 'log' && (
@@ -707,7 +819,8 @@ export default function ActiveCall() {
  */
 function labelToMatch(label) {
   if (!label) return null;
-  if (label === 'CPR')                  return { type: 'cpr' };
+  // 'CPR Started' is the label learned from executed/taught CPR commands.
+  if (label === 'CPR' || label === 'CPR Started') return { type: 'cpr' };
   if (label === 'ROSC')                 return { type: 'rosc' };
   if (label === 'Efforts Discontinued') return { type: 'discontinue' };
 
@@ -716,6 +829,11 @@ function labelToMatch(label) {
   if (INTERVENTIONS.find(i => i.label === label))
     return { type: 'event', label, category: 'intervention' };
   if (MEDICATIONS.find(m => m.label === label))
+    return { type: 'event', label, category: 'medication' };
+  // User-added buttons (can be taught via "Missed command").
+  if (getCustomButtons('interventions').find(b => b.label === label))
+    return { type: 'event', label, category: 'intervention' };
+  if (getCustomButtons('medications').find(b => b.label === label))
     return { type: 'event', label, category: 'medication' };
 
   // Custom / notes events

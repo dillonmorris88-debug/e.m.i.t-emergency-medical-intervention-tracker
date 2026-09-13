@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { Heart, Square, RotateCcw, Activity } from 'lucide-react';
 import { RHYTHMS } from '@/lib/eventData';
+import { TEACH_HIGHLIGHT } from '@/components/emit/DraggableButtonGrid';
 
 const CPR_INTERVAL = 120; // 2 minutes
 
@@ -10,7 +11,8 @@ function formatTime(seconds) {
   return `${String(m).padStart(2,'0')}:${String(s).padStart(2,'0')}`;
 }
 
-export default function CPRPanel({ call, onEvent, onROSC, onDiscontinue, onRhythm }) {
+export default function CPRPanel({ call, onEvent, onROSC, onDiscontinue, onRhythm, highlight }) {
+  const hl = highlight ? TEACH_HIGHLIGHT : '';
   const [codeSeconds, setCodeSeconds] = useState(0);
   const [cprSeconds, setCprSeconds] = useState(0);
   const [cprWarning, setCprWarning] = useState(false);
@@ -88,7 +90,7 @@ export default function CPRPanel({ call, onEvent, onROSC, onDiscontinue, onRhyth
             <button
               key={r.key}
               onClick={() => onRhythm(r.label)}
-              className={`py-2 px-1 rounded-lg text-xs font-bold border btn-tap transition-all
+              className={`py-2 px-1 rounded-lg text-xs font-bold border btn-tap transition-all ${hl}
                 ${call.current_rhythm === r.label
                   ? 'bg-purple-500/30 border-purple-400 text-purple-200'
                   : 'bg-secondary border-border text-muted-foreground hover:border-purple-400/50 hover:text-foreground'
@@ -104,14 +106,14 @@ export default function CPRPanel({ call, onEvent, onROSC, onDiscontinue, onRhyth
       <div className="grid grid-cols-2 gap-3">
         <button
           onClick={onROSC}
-          className="flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm bg-green-600/20 border border-green-500 text-green-300 hover:bg-green-600/40 btn-tap glow-green transition-all"
+          className={`flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm bg-green-600/20 border border-green-500 text-green-300 hover:bg-green-600/40 btn-tap glow-green transition-all ${hl}`}
         >
           <Activity className="w-4 h-4" />
           ROSC
         </button>
         <button
           onClick={onDiscontinue}
-          className="flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm bg-slate-700/40 border border-slate-500 text-slate-300 hover:bg-slate-600/40 btn-tap transition-all"
+          className={`flex items-center justify-center gap-2 py-3 rounded-xl font-bold text-sm bg-slate-700/40 border border-slate-500 text-slate-300 hover:bg-slate-600/40 btn-tap transition-all ${hl}`}
         >
           <Square className="w-4 h-4" />
           Discontinue

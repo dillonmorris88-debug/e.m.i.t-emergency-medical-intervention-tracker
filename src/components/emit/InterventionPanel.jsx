@@ -3,7 +3,7 @@ import { INTERVENTIONS } from '@/lib/eventData';
 import { useButtonLayout } from '@/hooks/useButtonLayout';
 import DraggableButtonGrid from '@/components/emit/DraggableButtonGrid';
 
-export default function InterventionPanel({ onEvent, onBugReport, onVoicePause, onVoiceResume }) {
+export default function InterventionPanel({ onEvent, onBugReport, onVoicePause, onVoiceResume, highlight }) {
   const { items, reorder, addItem, removeItem } = useButtonLayout('interventions', INTERVENTIONS);
 
   return (
@@ -24,6 +24,7 @@ export default function InterventionPanel({ onEvent, onBugReport, onVoicePause, 
         onBugReport={onBugReport}
         onVoicePause={onVoicePause}
         onVoiceResume={onVoiceResume}
+        highlight={highlight}
       />
     </div>
   );

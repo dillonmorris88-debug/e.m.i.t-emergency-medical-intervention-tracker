@@ -40,6 +40,7 @@
 
 import { isSpeakingSuppressed } from './speak.js';
 import { matchVoiceCommand } from './voiceCommandMatcher.js';
+import { VoiceLearningAgent } from './voiceLearningAgent.js';
 
 const WHISPER_KEY_STORAGE = 'emit_whisper_key';
 
@@ -113,9 +114,12 @@ const LEADING_FILLERS = new Set(['hey', 'hi', 'ok', 'okay', 'so', 'um', 'uh', 'a
 
 /**
  * Detect a wake word in a NORMALIZED transcript.
+ * @param {string}   text
+ * @param {string[]} learnedWakeTokens  this user's learned spellings of "EMIT"
+ *                                      (accepted as the first non-filler word)
  * Returns { command } — the text after the wake word ('' if none) — or null.
  */
-export function detectWakeWord(text) {
+export function detectWakeWord(text, learnedWakeTokens = []) {
   const tokens = text ? text.split(' ') : [];
 
   // 1. Known spellings, anywhere in the utterance.
@@ -133,6 +137,9 @@ export function detectWakeWord(text) {
   let i = 0;
   while (i < tokens.length && LEADING_FILLERS.has(tokens[i])) i++;
   const word = tokens[i] || '';
+  if (word && learnedWakeTokens.includes(word)) {
+    return { command: tokens.slice(i + 1).join(' ') };
+  }
   if (word.length >= 3 && word.length <= 6 && !WAKE_FUZZY_BLOCKLIST.has(word) &&
       (word[0] === 'e' || word[0] === 'a' || word[0] === 'i')) {
     if (WAKE_FUZZY_TARGETS.some((t) => levenshtein(word, t) <= 1)) {
@@ -140,6 +147,46 @@ export function detectWakeWord(text) {
     }
   }
   return null;
+}
+
+// Words too generic to teach as a command phrase on their own.
+const UNTEACHABLE_WORDS = new Set([
+  'the', 'and', 'for', 'you', 'now', 'was', 'are', 'with', 'that', 'this',
+  'okay', 'yeah', 'yes', 'just', 'please', 'here', 'there', 'what',
+]);
+
+/**
+ * Split a heard utterance the app missed into what should be learned.
+ *
+ * Returns { command, wakeVariant } or null when nothing is learnable:
+ *   - wake word detected       → command = text after it
+ *   - no wake word, but the first word is close to "emit" (edit distance ≤ 2)
+ *     and isn't itself a command → that word is this user's wake variant
+ *   - otherwise                → the whole utterance is the command
+ */
+export function splitMissedUtterance(text, learnedWakeTokens = []) {
+  let command = text || '';
+  let wakeVariant = null;
+
+  const wake = detectWakeWord(command, learnedWakeTokens);
+  if (wake) {
+    command = wake.command;
+  } else {
+    const tokens = command.split(' ');
+    let i = 0;
+    while (i < tokens.length && LEADING_FILLERS.has(tokens[i])) i++;
+    const word = tokens[i] || '';
+    const rest = tokens.slice(i + 1).join(' ');
+    if (rest && word.length >= 3 && word.length <= 7 && !WAKE_FUZZY_BLOCKLIST.has(word) &&
+        !matchVoiceCommand(word) &&
+        WAKE_FUZZY_TARGETS.some((t) => levenshtein(word, t) <= 2)) {
+      wakeVariant = word;
+      command = rest;
+    }
+  }
+
+  const teachable = command.split(' ').some((t) => t.length >= 2 && !UNTEACHABLE_WORDS.has(t));
+  return teachable ? { command, wakeVariant } : null;
 }
 
 // ── Shared routing (wake word → command) ─────────────────────────────────────
@@ -153,15 +200,25 @@ class BaseProvider {
     this._wakeWordCb = null;
     this._commandCb  = null;
     this._interimCb  = null;
+    this._heardCb    = null;
     this._active     = false;
     // Wake word heard without a command: commands starting before this time
     // are accepted without repeating the wake word.
     this._wakePendingUntil = 0;
+    // This user's learned spellings of "EMIT" (from missed-command teaching).
+    this._learnedWakeTokens = VoiceLearningAgent.getWakeVariants();
   }
 
   onWakeWord(cb) { this._wakeWordCb = cb; }
   onCommand(cb)  { this._commandCb  = cb; }
   onInterim(cb)  { this._interimCb  = cb; }
+  /** Every final transcript, addressed to EMIT or not (feeds "Missed command"). */
+  onHeard(cb)    { this._heardCb    = cb; }
+
+  /** Reload learned data — call after teaching so it applies immediately. */
+  refreshLearning() {
+    this._learnedWakeTokens = VoiceLearningAgent.getWakeVariants();
+  }
 
   /**
    * Route one final, normalized transcript.
@@ -173,8 +230,9 @@ class BaseProvider {
    */
   _route(text, confidence, startedAt, endedAt) {
     if (!text) return false;
+    if (this._heardCb) this._heardCb({ text, confidence, at: endedAt });
 
-    const wake = detectWakeWord(text);
+    const wake = detectWakeWord(text, this._learnedWakeTokens);
     if (wake) {
       if (this._interimCb) this._interimCb('');
       if (this._wakeWordCb) this._wakeWordCb();
@@ -250,18 +308,40 @@ const WHISPER_DEFAULT_CONFIDENCE = 0.9;
  * medications and EMS terms it would otherwise mishear.
  * Keep under ~224 tokens (Whisper's prompt limit).
  */
-const MEDICAL_PROMPT = [
-  'EMIT, start CPR. EMIT, epinephrine. EMIT, amiodarone. EMIT, V-fib. EMIT, ROSC.',
-  'EMIT, dirty epi drip. EMIT, fluid bolus. EMIT, Ofirmev. EMIT, fentanyl. EMIT, ketamine.',
-  'EMIT, Ativan. EMIT, Versed. EMIT, morphine. EMIT, adenosine. EMIT, aspirin. EMIT, Narcan.',
-  'EMIT, D50. EMIT, nitro. EMIT, albuterol. EMIT, DuoNeb.',
-  'EMIT, BVM. EMIT, King airway. EMIT, intubation. EMIT, CPAP. EMIT, defibrillation.',
-  'EMIT, cardioversion. EMIT, 12-lead. EMIT, needle decompression. EMIT, tourniquet.',
+// Ordered least → most important: when the user's own terms are added, lines
+// are dropped from the front to keep the prompt the same size.
+const MEDICAL_PROMPT_LINES = [
   'EMIT, wound packing. EMIT, C-spine. EMIT, splint. EMIT, oxygen.',
+  'EMIT, cardioversion. EMIT, 12-lead. EMIT, needle decompression. EMIT, tourniquet.',
+  'EMIT, BVM. EMIT, King airway. EMIT, intubation. EMIT, CPAP. EMIT, defibrillation.',
+  'EMIT, D50. EMIT, nitro. EMIT, albuterol. EMIT, DuoNeb.',
+  'EMIT, Ativan. EMIT, Versed. EMIT, morphine. EMIT, adenosine. EMIT, aspirin. EMIT, Narcan.',
+  'EMIT, dirty epi drip. EMIT, fluid bolus. EMIT, Ofirmev. EMIT, fentanyl. EMIT, ketamine.',
   'EMIT, PEA. EMIT, asystole. EMIT, V-tach. EMIT, A-fib. EMIT, SVT. EMIT, bradycardia.',
   'EMIT, normal sinus. EMIT, patient contact. EMIT, efforts discontinued.',
-].join(' ');
+  'EMIT, start CPR. EMIT, epinephrine. EMIT, amiodarone. EMIT, V-fib. EMIT, ROSC.',
+];
+const MEDICAL_PROMPT = MEDICAL_PROMPT_LINES.join(' ');
 const NORMALIZED_PROMPT = normalizeTranscript(MEDICAL_PROMPT);
+
+/**
+ * Build the Whisper prompt, appending the labels this user's commands were
+ * missed for (e.g. a custom button name Whisper keeps misspelling). Whisper
+ * weights the END of the prompt most, so personal terms go last.
+ */
+export function buildWhisperPrompt(missedLabels = []) {
+  const personal = missedLabels
+    .filter((label) => !NORMALIZED_PROMPT.includes(normalizeTranscript(label)))
+    .map((label) => `EMIT, ${label}.`)
+    .join(' ');
+  if (!personal) return MEDICAL_PROMPT;
+
+  const lines = [...MEDICAL_PROMPT_LINES];
+  while (lines.length > 1 && lines.join(' ').length + 1 + personal.length > MEDICAL_PROMPT.length) {
+    lines.shift();
+  }
+  return `${lines.join(' ')} ${personal}`;
+}
 
 // Stock phrases Whisper emits for silence or noise. Never valid commands.
 const HALLUCINATIONS = new Set([
@@ -634,12 +714,13 @@ export class WhisperProvider extends BaseProvider {
   }
 
   async _transcribe(wav) {
+    const prompt = buildWhisperPrompt(VoiceLearningAgent.getMissedLabels());
     for (let attempt = 0; attempt < REQUEST_ATTEMPTS; attempt++) {
       const form = new FormData();
       form.append('file', wav, 'audio.wav');
       form.append('model', WHISPER_MODEL);
       form.append('language', 'en');
-      form.append('prompt', MEDICAL_PROMPT);
+      form.append('prompt', prompt);
       form.append('temperature', '0');
       form.append('response_format', 'verbose_json');
 
@@ -769,7 +850,7 @@ export class WebSpeechProvider extends BaseProvider {
       const raw = result[a].confidence;
       // Safari and some Chrome alternatives report 0 — that means "unknown".
       const confidence = raw > 0 ? raw : null;
-      const wake = detectWakeWord(text);
+      const wake = detectWakeWord(text, this._learnedWakeTokens);
       const commandText = wake ? wake.command : text;
       const score =
         (wake ? 4 : 0) +

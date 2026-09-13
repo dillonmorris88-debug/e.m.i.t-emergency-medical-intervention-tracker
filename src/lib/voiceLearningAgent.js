@@ -355,6 +355,64 @@ class VoiceLearningAgentClass {
   }
 
   /**
+   * Learn from a command the app MISSED — the user tapped "Missed command",
+   * picked what they said, then tapped the button they meant.
+   *
+   * Effects:
+   *   - Teaches `commandText` → `label` (exact learned phrases score 1.0 in
+   *     predictCommand, so the same phrasing matches next time).
+   *   - Counts the miss on the command; the most-missed labels are added to
+   *     the Whisper prompt so the engine expects those words from this user.
+   *   - Remembers `wakeVariant` (how this user's "EMIT" was transcribed) so
+   *     it wakes the app next time.
+   *
+   * @param {string}      label        - Command label of the button tapped
+   * @param {string}      commandText  - Heard text after the wake word
+   * @param {string}      heardText    - Full heard utterance (diagnostics)
+   * @param {string|null} wakeVariant  - Mis-transcribed wake word, if any
+   */
+  learnMissedCommand(label, commandText, heardText, wakeVariant = null) {
+    if (!label || !commandText) return;
+    this.learn(label, null, commandText, null, 0.90);
+
+    const data = loadData();
+    const key = label.toLowerCase().replace(/[^a-z0-9]/g, '_');
+    const entry = data.commands[key];
+    if (entry) {
+      entry.missedCount = (entry.missedCount || 0) + 1;
+      entry.lastMissedAt = Date.now();
+    }
+    if (wakeVariant) {
+      if (!data.wakeVariants) data.wakeVariants = {};
+      data.wakeVariants[wakeVariant] = (data.wakeVariants[wakeVariant] || 0) + 1;
+    }
+    if (!data.corrections) data.corrections = [];
+    data.corrections.push({
+      ts:       Date.now(),
+      heard:    heardText?.toLowerCase().trim() ?? null,
+      wrong:    null,
+      intended: label,
+      source:   'missed',
+    });
+    if (data.corrections.length > 100) data.corrections = data.corrections.slice(-100);
+    saveData(data);
+  }
+
+  /** Wake-word spellings learned from this user's missed commands. */
+  getWakeVariants() {
+    return Object.keys(loadData().wakeVariants || {});
+  }
+
+  /** Labels this user's commands were most often missed for, most-missed first. */
+  getMissedLabels(limit = 8) {
+    return Object.values(loadData().commands || {})
+      .filter(c => c.missedCount > 0)
+      .sort((a, b) => (b.missedCount - a.missedCount) || ((b.lastMissedAt || 0) - (a.lastMissedAt || 0)))
+      .slice(0, limit)
+      .map(c => c.label);
+  }
+
+  /**
    * Return a summary of the user's speech profile for display in the UI.
    * Never includes protected health information — only transcript text fragments
    * and command labels.

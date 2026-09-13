@@ -4,6 +4,8 @@ import { useLongPress } from '@/hooks/useLongPress';
 import LearnModal from '@/components/emit/LearnModal';
 import AddCustomButtonModal from '@/components/emit/AddCustomButtonModal';
 
+export const TEACH_HIGHLIGHT = 'ring-2 ring-primary ring-offset-2 ring-offset-background';
+
 /**
  * Props:
  *  items        - array of { key, label, custom? }
@@ -15,8 +17,9 @@ import AddCustomButtonModal from '@/components/emit/AddCustomButtonModal';
  *  eventCategory - singular form for event log, e.g. 'intervention' | 'medication'
  *  buttonClass  - tailwind classes for the button
  *  onBugReport  - () => void
+ *  highlight    - outline every button (Missed command: "tap the button you meant")
  */
-export default function DraggableButtonGrid({ items, onReorder, onEvent, onAddItem, onRemoveItem, category, eventCategory, buttonClass, onBugReport, onVoicePause, onVoiceResume }) {
+export default function DraggableButtonGrid({ items, onReorder, onEvent, onAddItem, onRemoveItem, category, eventCategory, buttonClass, onBugReport, onVoicePause, onVoiceResume, highlight }) {
   const [editMode, setEditMode] = useState(false);
   const [learnItem, setLearnItem] = useState(null);
   const [showAddCustom, setShowAddCustom] = useState(false);
@@ -148,7 +151,7 @@ export default function DraggableButtonGrid({ items, onReorder, onEvent, onAddIt
               <button
                 {...longPressHandlers}
                 onClick={() => onEvent(item.label, eventCategory || category)}
-                className={`w-full ${buttonClass} py-3 px-3 rounded-xl text-sm font-semibold border btn-tap transition-all text-left`}
+                className={`w-full ${buttonClass} py-3 px-3 rounded-xl text-sm font-semibold border btn-tap transition-all text-left ${highlight ? TEACH_HIGHLIGHT : ''}`}
               >
                 {item.label}
               </button>

@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { Mic, MicOff, ChevronDown, Loader2, Brain } from 'lucide-react';
+import { Mic, MicOff, ChevronDown, Loader2, Brain, MessageCircleQuestion } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import { getWhisperApiKey } from '@/lib/speechProvider';
 
@@ -30,6 +30,8 @@ function getModeName() {
  * @param {string}    lastMatchedLabel
  * @param {number}    lastConfidence     - 0–1, shown next to last matched label
  * @param {() => void} onOpenTraining    - opens TrainingModeModal
+ * @param {() => void} onMissedCommand   - starts/cancels the "Missed command" teaching flow
+ * @param {boolean}   missedCommandActive
  */
 export default function VoiceIndicator({
   listening,
@@ -41,6 +43,8 @@ export default function VoiceIndicator({
   lastMatchedLabel,
   lastConfidence,
   onOpenTraining,
+  onMissedCommand,
+  missedCommandActive,
 }) {
   const [showHints, setShowHints] = useState(false);
 
@@ -133,6 +137,22 @@ export default function VoiceIndicator({
 
         {/* Right-side controls */}
         <div className="ml-auto flex items-center gap-2">
+          {/* Missed command — teach the button a spoken command was meant for */}
+          {onMissedCommand && (
+            <button
+              onClick={onMissedCommand}
+              className={`flex items-center gap-1 px-2.5 py-1 rounded-full text-xs font-semibold border btn-tap transition-colors ${
+                missedCommandActive
+                  ? 'bg-primary/20 border-primary/60 text-primary'
+                  : 'bg-secondary border-border text-muted-foreground hover:text-foreground hover:border-primary/50'
+              }`}
+              title="Voice missed a command? Pick what you said, then tap the button you meant"
+            >
+              <MessageCircleQuestion className="w-3.5 h-3.5" />
+              Missed command
+            </button>
+          )}
+
           {/* Training Mode button */}
           <button
             onClick={onOpenTraining}
